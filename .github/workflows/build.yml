@@ -21,10 +21,12 @@ jobs:
       patchesDeploy: ${{ steps.compare.outputs.patchesDeploy }}
       injectorDeploy: ${{ steps.compare.outputs.injectorDeploy }}
       kotlinDeploy: ${{ steps.compare.outputs.kotlinDeploy }}
+      voiceDeploy: ${{ steps.compare.outputs.voiceDeploy }}
       coreVersion: ${{ steps.compare.outputs.coreVersion }}
       patchesVersion: ${{ steps.compare.outputs.patchesVersion }}
       injectorVersion: ${{ steps.compare.outputs.injectorVersion }}
       kotlinVersion: ${{ steps.compare.outputs.kotlinVersion }}
+      voiceVersion: ${{ steps.compare.outputs.voiceVersion }}
     steps:
       - name: Checkout src
         uses: actions/checkout@v6
@@ -32,10 +34,16 @@ jobs:
           path: src
 
       - name: Checkout builds
-        uses: actions/checkout@v6
-        with:
-          ref: builds
-          path: builds
+        # The branch does not exist on a fresh fork, so it is created empty on first run
+        run: |
+          git init -q builds
+          git -C builds remote add origin "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
+          if git -C builds fetch --depth 1 origin builds:refs/remotes/origin/builds; then
+            git -C builds checkout -q -b builds --track origin/builds
+          else
+            echo "No builds branch yet, treating every component as undeployed"
+          fi
+          mkdir -p builds
 
       - name: Compare deployed versions
         id: compare
@@ -45,28 +53,35 @@ jobs:
           patchesVersion="$(cat $GITHUB_WORKSPACE/src/patches/build.gradle.kts | grep -E 'version = "' | cut -d '"' -f 2)"
           injectorVersion="$(cat $GITHUB_WORKSPACE/src/Injector/build.gradle.kts | grep -E 'version = "' | cut -d '"' -f 2)"
           kotlinVersion="$(cat $GITHUB_WORKSPACE/src/gradle/libs.versions.toml | grep -E 'kotlin-stdlib = "' | cut -d '"' -f 2)"
+          # The voice library ships with the core build and is versioned with it
+          voiceVersion="$coreVersion"
 
-          # Extract current deployed versions
-          coreVersionOld="$(jq -r '.coreVersion' $GITHUB_WORKSPACE/builds/data.json)"
-          patchesVersionOld="$(jq -r '.patchesVersion' $GITHUB_WORKSPACE/builds/data.json)"
-          injectorVersionOld="$(jq -r '.injectorVersion' $GITHUB_WORKSPACE/builds/data.json)"
-          kotlinVersionOld="$(jq -r '.kotlinVersion' $GITHUB_WORKSPACE/builds/data.json)"
+          # Extract current deployed versions, missing on the first run
+          data="$GITHUB_WORKSPACE/builds/data.json"
+          coreVersionOld="$(jq -r '.coreVersion // "none"' "$data" 2>/dev/null || echo none)"
+          patchesVersionOld="$(jq -r '.patchesVersion // "none"' "$data" 2>/dev/null || echo none)"
+          injectorVersionOld="$(jq -r '.injectorVersion // "none"' "$data" 2>/dev/null || echo none)"
+          kotlinVersionOld="$(jq -r '.kotlinVersion // "none"' "$data" 2>/dev/null || echo none)"
+          voiceVersionOld="$(jq -r '.voiceVersion // "none"' "$data" 2>/dev/null || echo none)"
 
           # Determine whether deployments are required
           coreDeploy=$([ "$coreVersion" != "$coreVersionOld" ] && echo true || echo false)
           patchesDeploy=$([ "$patchesVersion" != "$patchesVersionOld" ] && echo true || echo false)
           injectorDeploy=$([ "$injectorVersion" != "$injectorVersionOld" ] && echo true || echo false)
           kotlinDeploy=$([ "$kotlinVersion" != "$kotlinVersionOld" ] && echo true || echo false)
+          voiceDeploy=$([ "$voiceVersion" != "$voiceVersionOld" ] && echo true || echo false)
 
           # Write step output
           echo "coreVersion=$coreVersion" >> "$GITHUB_OUTPUT"
           echo "patchesVersion=$patchesVersion" >> "$GITHUB_OUTPUT"
           echo "injectorVersion=$injectorVersion" >> "$GITHUB_OUTPUT"
           echo "kotlinVersion=$kotlinVersion" >> "$GITHUB_OUTPUT"
+          echo "voiceVersion=$voiceVersion" >> "$GITHUB_OUTPUT"
           echo "coreDeploy=$coreDeploy" >> "$GITHUB_OUTPUT"
           echo "patchesDeploy=$patchesDeploy" >> "$GITHUB_OUTPUT"
           echo "injectorDeploy=$injectorDeploy" >> "$GITHUB_OUTPUT"
           echo "kotlinDeploy=$kotlinDeploy" >> "$GITHUB_OUTPUT"
+          echo "voiceDeploy=$voiceDeploy" >> "$GITHUB_OUTPUT"
 
   build:
     runs-on: ubuntu-latest
@@ -128,15 +143,17 @@ jobs:
             ${{ github.workspace }}/Bugcordvoice.aar
 
       - name: Deploy documentation
-        # Refer to comment on maven job as to why repository is explicitly checked
-        if: ${{ github.ref == 'refs/heads/main'
-          && !cancelled()
-          && github.repository == 'heavycaffeiner/Bugcord' }}
+        if: ${{ github.ref == 'refs/heads/main' && !cancelled() }}
         shell: bash # GLOBIGNORE is unique to bash
         env:
           DOCS_REPO: heavycaffeiner/Bugcord-dokka
           API_TOKEN: ${{ secrets.API_PAT_GITHUB }}
         run: |
+          if [ -z "$API_TOKEN" ]; then
+            echo "No API_PAT_GITHUB secret configured, skipping documentation deploy"
+            exit 0
+          fi
+
           # Generate docs
           ./gradlew :Bugcord:dokkaGenerateHtml
 
@@ -180,7 +197,9 @@ jobs:
     if: ${{ github.ref == 'refs/heads/main' && (
       needs.inspect.outputs.coreDeploy == 'true' ||
       needs.inspect.outputs.injectorDeploy == 'true' ||
-      needs.inspect.outputs.patchesDeploy == 'true' ) }}
+      needs.inspect.outputs.patchesDeploy == 'true' ||
+      needs.inspect.outputs.kotlinDeploy == 'true' ||
+      needs.inspect.outputs.voiceDeploy == 'true' ) }}
     permissions:
       contents: write
     steps:
@@ -190,10 +209,17 @@ jobs:
           path: src
 
       - name: Checkout builds
-        uses: actions/checkout@v6
-        with:
-          ref: builds
-          path: builds
+        # The branch does not exist on a fresh fork, so it is created as an orphan on first run
+        run: |
+          git init -q builds
+          git -C builds remote add origin "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
+          if git -C builds fetch --depth 1 origin builds:refs/remotes/origin/builds; then
+            git -C builds checkout -q -b builds --track origin/builds
+          else
+            git -C builds checkout -q --orphan builds
+          fi
+          git -C builds config user.email "actions@github.com"
+          git -C builds config user.name "GitHub Actions"
 
       - name: Download build artifacts
         uses: actions/download-artifact@v8
@@ -211,25 +237,28 @@ jobs:
           [ "${{ needs.inspect.outputs.injectorDeploy }}" == "true" ] && cp $GITHUB_WORKSPACE/artifacts/Injector.dex $GITHUB_WORKSPACE/builds
           [ "${{ needs.inspect.outputs.patchesDeploy }}" == "true" ] && cp $GITHUB_WORKSPACE/artifacts/patches.zip $GITHUB_WORKSPACE/builds
           [ "${{ needs.inspect.outputs.kotlinDeploy }}" == "true" ] && cp $GITHUB_WORKSPACE/artifacts/kotlin.dex $GITHUB_WORKSPACE/builds
-          cp $GITHUB_WORKSPACE/artifacts/Bugcordvoice.aar $GITHUB_WORKSPACE/builds
+          [ "${{ needs.inspect.outputs.voiceDeploy }}" == "true" ] && cp $GITHUB_WORKSPACE/artifacts/Bugcordvoice.aar $GITHUB_WORKSPACE/builds
 
           # Write versions to data.json
           # `bugcordHash` is kept to force old builds to update (when versions were tied to a commit hash)
-          jq '. + { coreVersion: $cv, injectorVersion: $iv, patchesVersion: $pv, kotlinVersion: $kv, bugcordHash: "0000000" }' \
+          jq '. + { coreVersion: $cv, injectorVersion: $iv, patchesVersion: $pv, kotlinVersion: $kv, voiceVersion: $vv, bugcordHash: "0000000" }' \
              --arg cv "${{ needs.inspect.outputs.coreVersion }}" \
              --arg iv "${{ needs.inspect.outputs.injectorVersion }}" \
              --arg pv "${{ needs.inspect.outputs.patchesVersion }}" \
              --arg kv "${{ needs.inspect.outputs.kotlinVersion }}" \
+             --arg vv "${{ needs.inspect.outputs.voiceVersion }}" \
              $GITHUB_WORKSPACE/src/.assets/data.json > $GITHUB_WORKSPACE/builds/data.json
 
           # Commit and push
           cd $GITHUB_WORKSPACE/builds
-          git config --local user.email "actions@github.com"
-          git config --local user.name "GitHub Actions"
           git add .
           if [[ `git status --porcelain` ]]; then
             git commit -m "Build $GITHUB_SHA"
-            git push
+            if git rev-parse --abbrev-ref --symbolic-full-name '@{u}' > /dev/null 2>&1; then
+              git push
+            else
+              git push -u origin builds
+            fi
           fi
 
   #   - name: Wait for GitHub Pages
@@ -253,13 +282,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     needs: [ inspect ]
-    # The existence of secrets should be checked here instead of repository owner,
-    # but because GH Actions is shit, there is no way to do this without smuggling
-    # the secret through a separate job's step output.
-    # Job-level env is not accessible here either.
     if: ${{ github.ref == 'refs/heads/main'
-      && needs.inspect.outputs.coreDeploy == 'true'
-      && github.repository == 'heavycaffeiner/Bugcord' }}
+      && needs.inspect.outputs.coreDeploy == 'true' }}
     permissions:
       contents: read
     steps:
@@ -286,5 +310,10 @@ jobs:
           MAVEN_RELEASES_USERNAME: ${{ secrets.MAVEN_RELEASES_USERNAME }}
           MAVEN_RELEASES_PASSWORD: ${{ secrets.MAVEN_RELEASES_PASSWORD }}
         run: |
+          if [ -z "$MAVEN_RELEASES_USERNAME" ] || [ -z "$MAVEN_RELEASES_PASSWORD" ]; then
+            echo "No Maven release credentials configured, skipping publish"
+            exit 0
+          fi
+
           chmod +x gradlew
           ./gradlew --stacktrace :Bugcord:publishAllPublicationsToBugcordRepository
