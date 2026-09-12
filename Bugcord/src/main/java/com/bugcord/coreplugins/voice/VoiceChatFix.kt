@@ -154,7 +154,7 @@ internal class VoiceChatFix : CorePlugin(Manifest("VoiceChatFix"))  {
     private var daveEpoch = 0
 
     internal companion object {
-        // Native libs and webrtc dex are built together (aliuvoice aar)
+        // Native libs and webrtc dex are built together (bugcordvoice aar)
         // the lib version must match exactly but injector & patches only need a min version
         // TODO: Injector check shouldn't be necessary,
         //  let's keep it here until this PR is ready to merge just in case we need it later
