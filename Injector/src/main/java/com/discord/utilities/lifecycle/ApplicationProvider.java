@@ -2,7 +2,7 @@ package com.discord.utilities.lifecycle;
 
 import android.app.Application;
 
-import com.aliucord.injector.InjectorKt;
+import com.bugcord.injector.InjectorKt;
 import com.discord.app.App;
 
 import d0.z.d.m;
@@ -10,7 +10,7 @@ import d0.z.d.m;
 /**
  * This is a class within the Discord app that conveniently happens to be close to the
  * app's the real entrypoint, that being {@link App#onCreate()}. We can override this
- * class with Injector and call our own Injector entrypoint to load Aliucord.
+ * class with Injector and call our own Injector entrypoint to load Bugcord.
  */
 @SuppressWarnings("unused")
 public final class ApplicationProvider {
@@ -31,7 +31,7 @@ public final class ApplicationProvider {
         m.checkNotNullParameter(app, "application");
         application = app;
 
-        // Aliucord changed: call injector
+        // Bugcord changed: call injector
         InjectorKt.init(app);
     }
 }

@@ -1,5 +1,5 @@
 /*
- * This file is part of Aliucord, an Android Discord client mod.
+ * This file is part of Bugcord, an Android Discord client mod.
  * Copyright (c) 2023 Juby210 & Vendicated
  * Licensed under the Open Software License version 3.0
  */
@@ -35,7 +35,7 @@ class _UpdateDialogState extends State<UpdateDialog> {
 
   void _update() async {
     setState(() => _updating = true);
-    final outPath = '${storageRoot.path}/Aliucord/Installer.apk';
+    final outPath = '${storageRoot.path}/Bugcord/Installer.apk';
     try {
       await dio.download(
         widget.downloadUrl,

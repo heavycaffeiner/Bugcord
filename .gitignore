@@ -14,3 +14,4 @@ local.properties
 *org.eclipse.buildship.core.prefs
 .vscode
 /patches/smali/
+Bugcord-Manager/

@@ -1,5 +1,5 @@
 /*
- * This file is part of Aliucord, an Android Discord client mod.
+ * This file is part of Bugcord, an Android Discord client mod.
  * Copyright (c) 2023 Juby210 & Vendicated
  * Licensed under the Open Software License version 3.0
  */
@@ -44,7 +44,8 @@ class _InstallPageState extends State<InstallPage> {
     setState(() => _logs += 'Downloading discord apk..\n');
     try {
       await dio.download(
-        '$backendHost/download/discord?v=${widget.supportedVersion}',
+        '${backendHost}com/discord/discord/${widget.supportedVersion}'
+        '/discord-${widget.supportedVersion}.apk',
         apk,
         onReceiveProgress: (count, total) => setState(() => _progress = count / total),
       );
@@ -63,22 +64,22 @@ class _InstallPageState extends State<InstallPage> {
 
   void _install(String apk) async {
     final cache = (await getApplicationSupportDirectory()).path;
-    final aliucordDex = '$cache/classes.dex';
+    final bugcordDex = '$cache/classes.dex';
     var downloadManifest = true;
     if (prefs.getBool('use_dex_from_storage') ?? false) {
       final dexFile = File(prefs.getString('dex_location') ?? defaultDexLocation);
       if (await dexFile.exists()) {
-        await dexFile.copy(aliucordDex);
-        final manifestFile = File('${storageRoot.path}/Aliucord/AndroidManifest.xml');
+        await dexFile.copy(bugcordDex);
+        final manifestFile = File('${storageRoot.path}/Bugcord/AndroidManifest.xml');
         if (await manifestFile.exists()) {
           await manifestFile.copy('$cache/AndroidManifest.xml');
           downloadManifest = false;
         }
         if (prefs.containsKey('dex_commit')) prefs.remove('dex_commit'); // invalidate cache
-      } else if (!await _downloadAliucord(aliucordDex)) {
+      } else if (!await _downloadBugcord(bugcordDex)) {
         return _onFailed();
       }
-    } else if (!await _downloadAliucord(aliucordDex)) {
+    } else if (!await _downloadBugcord(bugcordDex)) {
       return _onFailed();
     }
     if (downloadManifest && !await _downloadManifest(cache)) return _onFailed();
@@ -88,7 +89,7 @@ class _InstallPageState extends State<InstallPage> {
     try {
       await patchApk(apk, prefs.getBool('replace_bg') ?? true);
       await signApk();
-      installApk('${storageRoot.path}/Aliucord/Aliucord.apk');
+      installApk('${storageRoot.path}/Bugcord/Bugcord.apk');
       // ignore: use_build_context_synchronously
       Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => const HomePage()));
     } on PlatformException catch (e) {
@@ -97,7 +98,7 @@ class _InstallPageState extends State<InstallPage> {
     }
   }
 
-  Future<bool> _downloadAliucord(String out) async {
+  Future<bool> _downloadBugcord(String out) async {
     if ((prefs.getString('dex_commit') ?? '') == widget.commit && await File(out).exists()) return true;
     setState(() => _logs += 'Downloading Injector.dex..\n');
     final url = githubAPI!.getDownloadUrl(widget.commit, 'Injector.dex');

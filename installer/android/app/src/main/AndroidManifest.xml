@@ -1,6 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
-    package="com.aliucord.installer">
+    package="com.bugcord.installer">
 
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
@@ -10,14 +10,14 @@
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
 
     <queries>
-      <package android:name="com.aliucord" />
+      <package android:name="com.bugcord" />
       <package android:name="com.discord" />
     </queries>
 
     <application
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
-        android:label="Aliucord Installer"
+        android:label="Bugcord Installer"
         android:requestLegacyExternalStorage="true"
         tools:ignore="AllowBackup">
         <provider

@@ -1,5 +1,5 @@
 /*
- * This file is part of Aliucord, an Android Discord client mod.
+ * This file is part of Bugcord, an Android Discord client mod.
  * Copyright (c) 2023 Juby210 & Vendicated
  * Licensed under the Open Software License version 3.0
  */
@@ -42,7 +42,7 @@ class _AppState extends State<MyApp> {
     return DynamicColorBuilder(
       builder: (ColorScheme? lightDynamic, ColorScheme? darkDynamic) {
         return MaterialApp(
-          title: 'Aliucord Installer',
+          title: 'Bugcord Installer',
           theme: themeManager.applyMonet(Themes.lightTheme, lightDynamic),
           darkTheme: themeManager.applyMonet(Themes.darkTheme, darkDynamic),
           themeMode: themeManager.currentTheme(),

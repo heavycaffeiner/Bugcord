@@ -1,5 +1,5 @@
 /*
- * This file is part of Aliucord, an Android Discord client mod.
+ * This file is part of Bugcord, an Android Discord client mod.
  * Copyright (c) 2024 Juby210 & Vendicated
  * Licensed under the Open Software License version 3.0
  */
@@ -50,7 +50,7 @@ class _ManagerDialogState extends State<ManagerDialog> {
       child: AlertDialog(
         title: const Text('Installer is no longer supported'),
         content: const Text(
-            'Please install new Aliucord Manager app for managing (installing, updating) Aliucord.\n\nAliucord Manager has improved user experience and support for new Android versions.\n\nAlso in the future some updates will require Aliucord apk update using Manager.\n\nUsing Installer may not install Aliucord correctly and may result with broken installation.'),
+            'Please install new Bugcord Manager app for managing (installing, updating) Bugcord.\n\nBugcord Manager has improved user experience and support for new Android versions.\n\nAlso in the future some updates will require Bugcord apk update using Manager.\n\nUsing Installer may not install Bugcord correctly and may result with broken installation.'),
         actions: [
           TextButton(
             onPressed: _dismiss,
@@ -62,7 +62,7 @@ class _ManagerDialogState extends State<ManagerDialog> {
           ),
           TextButton(
             onPressed: () =>
-                openUrl("https://github.com/Aliucord/Manager/releases"),
+                openUrl("https://github.com/heavycaffeiner/Bugcord-Manager/releases"),
             child: const Row(mainAxisSize: MainAxisSize.min, children: [
               Icon(Icons.file_download),
               Text(' Install Manager'),

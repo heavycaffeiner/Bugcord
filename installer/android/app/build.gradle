@@ -20,11 +20,11 @@ if (keystorePropertiesFile.exists()) {
 }
 
 android {
-    namespace = "com.aliucord.installer"
+    namespace = "com.bugcord.installer"
     compileSdk = 34
 
     defaultConfig {
-        applicationId "com.aliucord.installer"
+        applicationId "com.bugcord.installer"
         minSdk = 21
         //noinspection OldTargetApi
         targetSdk = 29

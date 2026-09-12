@@ -1,5 +1,5 @@
 /*
- * This file is part of Aliucord, an Android Discord client mod.
+ * This file is part of Bugcord, an Android Discord client mod.
  * Copyright (c) 2023 Juby210 & Vendicated
  * Licensed under the Open Software License version 3.0
  */
@@ -62,8 +62,8 @@ class Asset {
 }
 
 class GithubAPI with ChangeNotifier {
-  static const _org = 'Aliucord';
-  static const _repo = 'Aliucord';
+  static const _org = 'Bugcord';
+  static const _repo = 'Bugcord';
 
   static const _apiHost = 'api.github.com';
   static const _commitsEndpoint = '/repos/$_org/$_repo/commits';
@@ -76,7 +76,7 @@ class GithubAPI with ChangeNotifier {
   void checkForUpdates() async {
     final release = await getLatestRelease();
     if (release == null) return;
-    if (release.body.contains('Aliucord/Manager')) {
+    if (release.body.contains('heavycaffeiner/Bugcord-Manager')) {
       managerReleased = true;
       return showDialog(
           context: navigatorKey.currentContext!,

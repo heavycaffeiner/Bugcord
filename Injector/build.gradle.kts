@@ -1,13 +1,13 @@
 version = "2.4.0"
 
 plugins {
-    alias(libs.plugins.aliucord.injector)
+    alias(libs.plugins.bugcord.injector)
     alias(libs.plugins.android.library)
     alias(libs.plugins.kotlin)
 }
 
 android {
-    namespace = "com.aliucord.injector"
+    namespace = "com.bugcord.injector"
     compileSdk = 36
 
     defaultConfig {
@@ -50,7 +50,7 @@ kotlin {
 }
 
 dependencies {
-    compileOnly(libs.aliuhook)
+    compileOnly(libs.bugcordhook)
     compileOnly(libs.appcompat)
     compileOnly(libs.discord)
     compileOnly(libs.kotlin.stdlib)

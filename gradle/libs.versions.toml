@@ -1,6 +1,7 @@
 [versions]
-aliucord-gradle = "2.3.0"
-aliuhook = "1.1.4"
+# Version of the build plugin published by the upstream project we forked from.
+bugcord-gradle = "2.3.0"
+bugcordhook = "1.1.4"
 android-gradle = "8.13.2"
 desugar = "2.1.5"
 discord = "126021"
@@ -19,7 +20,7 @@ constraintlayout = "2.1.4"
 material = "1.5.0"
 
 [libraries]
-aliuhook = { module = "com.aliucord:Aliuhook", version.ref = "aliuhook" }
+bugcordhook = { module = "com.bugcord:Bugcordhook", version.ref = "bugcordhook" }
 appcompat = { module = "androidx.appcompat:appcompat", version.ref = "appcompat" }
 constraintlayout = { module = "androidx.constraintlayout:constraintlayout", version.ref = "constraintlayout" }
 desugar = { module = "com.android.tools:desugar_jdk_libs", version.ref = "desugar" }
@@ -30,8 +31,8 @@ smali = { module = "com.android.tools.smali:smali", version.ref = "smali" }
 smali-baksmali = { module = "com.android.tools.smali:smali-baksmali", version.ref = "smali" }
 
 [plugins]
-aliucord-core = { id = "com.aliucord.core", version.ref = "aliucord-gradle" }
-aliucord-injector = { id = "com.aliucord.injector", version.ref = "aliucord-gradle" }
+bugcord-core = { id = "com.aliucord.core", version.ref = "bugcord-gradle" }
+bugcord-injector = { id = "com.aliucord.injector", version.ref = "bugcord-gradle" }
 android-library = { id = "com.android.library", version.ref = "android-gradle" }
 dokka-html = { id = "org.jetbrains.dokka", version.ref = "dokka" }
 dokka-javadoc = { id = "org.jetbrains.dokka-javadoc", version.ref = "dokka" }

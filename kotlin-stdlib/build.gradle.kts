@@ -7,7 +7,7 @@ plugins {
 
 // Boilerplate unused config
 android {
-    namespace = "com.aliucord"
+    namespace = "com.bugcord"
     compileSdk = 36
 
     defaultConfig {
@@ -23,7 +23,7 @@ dependencies {
 }
 
 val compileDexTask = tasks.register("compileDex", CompileDexTask::class) {
-    group = "aliucord-internal"
+    group = "bugcord-internal"
 
     @OptIn(SensitiveAliucordApi::class)
     scanDependencies = false
@@ -41,7 +41,7 @@ val compileDexTask = tasks.register("compileDex", CompileDexTask::class) {
 }
 
 tasks.register("make", Copy::class.java) {
-    group = "aliucord"
+    group = "bugcord"
 
     from(compileDexTask.map { it.outputDir.file("classes.dex") })
     into(project.layout.buildDirectory.dir("outputs"))

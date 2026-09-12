@@ -1,5 +1,5 @@
 /*
- * This file is part of Aliucord, an Android Discord client mod.
+ * This file is part of Bugcord, an Android Discord client mod.
  * Copyright (c) 2023 Juby210 & Vendicated
  * Licensed under the Open Software License version 3.0
  */
@@ -28,7 +28,7 @@ class SettingsPage extends StatefulWidget {
 
 class _SettingsPageState extends State<SettingsPage> with SingleTickerProviderStateMixin {
   static final List<CheckBoxData> _checkBoxes = [
-    CheckBoxData('replace_bg', 'Replace icon background with Aliucord\'s', true),
+    CheckBoxData('replace_bg', 'Replace icon background with Bugcord\'s', true),
     CheckBoxData('use_dex_from_storage', 'Use Injector.dex from storage', false),
     CheckBoxData('developer_mode', 'Developer Mode', false),
   ];

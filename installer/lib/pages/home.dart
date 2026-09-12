@@ -1,5 +1,5 @@
 /*
- * This file is part of Aliucord, an Android Discord client mod.
+ * This file is part of Bugcord, an Android Discord client mod.
  * Copyright (c) 2023 Juby210 & Vendicated
  * Licensed under the Open Software License version 3.0
  */
@@ -57,7 +57,7 @@ class _HomePageState extends State<HomePage> {
   Widget build(BuildContext context) {
     if (!_permissionsGranted) {
       return Scaffold(
-      appBar: AppBar(title: const Text('Aliucord Installer')),
+      appBar: AppBar(title: const Text('Bugcord Installer')),
       body: Center(child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
@@ -78,7 +78,7 @@ class _HomePageState extends State<HomePage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Aliucord Installer'),
+        title: const Text('Bugcord Installer'),
         actions: [
           Tooltip(message: 'Support server', child: IconButton(
             icon: const Icon(CustomIcons.discord),
@@ -99,7 +99,7 @@ class _HomePageState extends State<HomePage> {
           leading: Icon(Icons.data_usage, color: Colors.red, size: 40),
         )) : const SizedBox.shrink(),
         Card(child: ListTile(
-          title: const Text('Aliucord'),
+          title: const Text('Bugcord'),
           subtitle: RichText(text: TextSpan(
             style: Theme.of(context).textTheme.bodyMedium,
             text: 'Supported version: ',
@@ -140,14 +140,14 @@ class _HomePageState extends State<HomePage> {
       if (res) {
         showDialog(context: navigatorKey.currentContext!, barrierDismissible: false, builder: (context) => AlertDialog(
           title: const Text('Keystore Missing'),
-          content: const Text('Aliucord is installed, but the keystore is missing. This likely means you deleted "ks.keystore" in the Aliucord folder. As a consequence, you can not update Aliucord directly and must instead first uninstall the old Aliucord.'),
+          content: const Text('Bugcord is installed, but the keystore is missing. This likely means you deleted "ks.keystore" in the Bugcord folder. As a consequence, you can not update Bugcord directly and must instead first uninstall the old Bugcord.'),
           actions: [
             TextButton(
               child: const Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [ Icon(Icons.delete_outlined), Text(' Uninstall') ],
               ),
-              onPressed: () async => await uninstallAliucord(),
+              onPressed: () async => await uninstallBugcord(),
             ),
           ],
         ));

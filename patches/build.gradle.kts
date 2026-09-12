@@ -13,7 +13,7 @@ plugins {
 }
 
 android {
-    namespace = "com.aliucord.patches"
+    namespace = "com.bugcord.patches"
     compileSdk = 36
 }
 
@@ -40,11 +40,11 @@ val patchesBundle = layout.buildDirectory.file("outputs/patches.zip")
 
 /** Task group for all public tasks */
 @Suppress("PropertyName")
-val TASK_GROUP = "aliucord"
+val TASK_GROUP = "bugcord"
 
 /** Task group for all private tasks */
 @Suppress("PropertyName")
-val TASK_GROUP_INTERNAL = "aliucord-internal"
+val TASK_GROUP_INTERNAL = "bugcord-internal"
 
 val localPropertiesFile = project.rootProject.file("local.properties")
 val localProperties = Properties().apply {

@@ -1,5 +1,5 @@
 /*
- * This file is part of Aliucord, an Android Discord client mod.
+ * This file is part of Bugcord, an Android Discord client mod.
  * Copyright (c) 2023 Juby210 & Vendicated
  * Licensed under the Open Software License version 3.0
  */
@@ -34,7 +34,7 @@ Future<double> getFreeSpace() async => await channel.invokeMethod('getFreeSpace'
 Future<int> getVersionCode() async => await channel.invokeMethod('getVersionCode');
 Future<String> getVersionName() async => await channel.invokeMethod('getVersionName');
 Future<bool> checkKeystoreDeleted() async => await channel.invokeMethod('checkKeystoreDeleted');
-Future<void> uninstallAliucord() async => await channel.invokeMethod('uninstallAliucord');
+Future<void> uninstallBugcord() async => await channel.invokeMethod('uninstallBugcord');
 Future<void> toast(String message) => channel.invokeMethod('toast', message);
 
 Future<Iterable<AppInfo>> getInstalledDiscordApps() async {

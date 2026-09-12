@@ -1,4 +1,4 @@
--keep class com.aliucord.** { *; }
+-keep class com.bugcord.** { *; }
 
 -keepclasseswithmembernames class * {
     native <methods>;
