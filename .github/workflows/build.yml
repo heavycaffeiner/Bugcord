@@ -97,10 +97,11 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
 
-      - name: Publish hook to maven local
+      - name: Publish submodule libraries to maven local
         run: |
-          chmod +x gradlew Bugcord-Hook/gradlew
+          chmod +x gradlew Bugcord-Hook/gradlew Bugcord-WebRTC/gradlew
           ./gradlew -p Bugcord-Hook :core:publishToMavenLocal
+          ./gradlew -p Bugcord-WebRTC publishToMavenLocal
 
       - name: Build project
         env:
@@ -109,7 +110,10 @@ jobs:
           chmod +x gradlew
           ./gradlew --stacktrace \
             :Bugcord:make :Injector:make :kotlin-stdlib:make \
+            :voice:publishToMavenLocal \
             :patches:package :patches:disassembleWithPatches :patches:testPatches
+          cp "$HOME/.m2/repository/com/bugcord/Bugcordvoice/1.0.0/Bugcordvoice-1.0.0.aar" \
+             "$GITHUB_WORKSPACE/Bugcordvoice.aar"
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v7
@@ -121,6 +125,7 @@ jobs:
             ${{ github.workspace }}/Injector/build/outputs/Injector.dex
             ${{ github.workspace }}/patches/build/outputs/patches.zip
             ${{ github.workspace }}/kotlin-stdlib/build/outputs/kotlin.dex
+            ${{ github.workspace }}/Bugcordvoice.aar
 
       - name: Deploy documentation
         # Refer to comment on maven job as to why repository is explicitly checked
@@ -206,6 +211,7 @@ jobs:
           [ "${{ needs.inspect.outputs.injectorDeploy }}" == "true" ] && cp $GITHUB_WORKSPACE/artifacts/Injector.dex $GITHUB_WORKSPACE/builds
           [ "${{ needs.inspect.outputs.patchesDeploy }}" == "true" ] && cp $GITHUB_WORKSPACE/artifacts/patches.zip $GITHUB_WORKSPACE/builds
           [ "${{ needs.inspect.outputs.kotlinDeploy }}" == "true" ] && cp $GITHUB_WORKSPACE/artifacts/kotlin.dex $GITHUB_WORKSPACE/builds
+          cp $GITHUB_WORKSPACE/artifacts/Bugcordvoice.aar $GITHUB_WORKSPACE/builds
 
           # Write versions to data.json
           # `bugcordHash` is kept to force old builds to update (when versions were tied to a commit hash)

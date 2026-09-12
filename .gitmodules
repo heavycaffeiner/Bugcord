@@ -1,3 +1,6 @@
 [submodule "Bugcord-Hook"]
 	path = Bugcord-Hook
 	url = https://github.com/heavycaffeiner/Bugcord-Hook
+[submodule "Bugcord-WebRTC"]
+	path = Bugcord-WebRTC
+	url = https://github.com/heavycaffeiner/Bugcord-WebRTC

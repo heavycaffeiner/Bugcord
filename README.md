@@ -83,14 +83,21 @@ punished by Discord for using Bugcord with the official plugins, use it at your 
 
 ## 🛠 Building
 
-The hook library lives in the [Bugcord-Hook](https://github.com/heavycaffeiner/Bugcord-Hook) repository and is vendored here as a git submodule. It has to be published to the local Maven repository before the core is built:
+The hook library ([Bugcord-Hook](https://github.com/heavycaffeiner/Bugcord-Hook)) and the WebRTC
+classes ([Bugcord-WebRTC](https://github.com/heavycaffeiner/Bugcord-WebRTC)) live in their own
+repositories and are vendored here as git submodules. Both have to be published to the local Maven
+repository before the core is built:
 
 ```shell
 git clone --recurse-submodules https://github.com/heavycaffeiner/Bugcord
 cd Bugcord
 ./gradlew -p Bugcord-Hook :core:publishToMavenLocal
-./gradlew :Bugcord:make :Injector:make :kotlin-stdlib:make
+./gradlew -p Bugcord-WebRTC publishToMavenLocal
+./gradlew :Bugcord:make :Injector:make :kotlin-stdlib:make :voice:publishToMavenLocal
 ```
+
+`:voice:publishToMavenLocal` produces the AAR the Manager injects; it carries the WebRTC classes
+dexed into `webrtc.dex`.
 
 An Android SDK with NDK 29 and a JDK 21 are required.
 
