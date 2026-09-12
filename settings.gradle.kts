@@ -27,6 +27,7 @@ include(":Bugcord")
 include(":Injector")
 include(":patches")
 include(":kotlin-stdlib")
+include(":voice")
 
 rootProject.name = "Bugcord"
 

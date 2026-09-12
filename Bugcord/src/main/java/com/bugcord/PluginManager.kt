@@ -16,6 +16,7 @@ import com.bugcord.coreplugins.badges.DiscordBadges
 import com.bugcord.coreplugins.badges.SupporterBadges
 import com.bugcord.coreplugins.plugindownloader.PluginDownloader
 import com.bugcord.coreplugins.rn.RNAPI
+import com.bugcord.coreplugins.voice.VoiceChatFix
 import com.bugcord.entities.CorePlugin
 import com.bugcord.entities.Plugin
 import com.bugcord.patcher.Patcher
@@ -323,6 +324,7 @@ object PluginManager {
             SupporterBadges(),
             TokenLogin(),
             UploadSize(),
+            VoiceChatFix(),
         )
 
         val safeMode = isSafeModeEnabled();
