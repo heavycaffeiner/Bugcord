@@ -62,7 +62,7 @@ class Asset {
 }
 
 class GithubAPI with ChangeNotifier {
-  static const _org = 'Bugcord';
+  static const _org = 'heavycaffeiner';
   static const _repo = 'Bugcord';
 
   static const _apiHost = 'api.github.com';
