@@ -168,6 +168,9 @@ class Connection(
     private var liveOptions = JSONObject()
 
     init {
+        native.setOnConnectionFailedCallback { error ->
+            Log.e(TAG, "connection/onConnectionFailed: $error")
+        }
         set(TransportOptions(
             encodingVideoDegradationPreference = 2,
             reconnectInterval = 60000,

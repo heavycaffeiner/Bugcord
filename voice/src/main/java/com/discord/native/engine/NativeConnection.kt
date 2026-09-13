@@ -17,6 +17,10 @@ class NativeConnection {
         fun onMLSProcessedCommit(processedCommit: Boolean, protocolVersion: Int, rosterChange: String)
     }
 
+    fun interface ConnectionFailedCallback {
+        fun onConnectionFailed(error: String)
+    }
+
     fun interface MLSFailureCallback {
         fun onMLSFailureCallback(source: String, reason: String)
     }
@@ -117,6 +121,8 @@ class NativeConnection {
 
     external fun setNoInputThreshold(threshold: Float)
 
+    external fun setOnConnectionFailedCallback(callback: ConnectionFailedCallback)
+
     external fun setOnFirstFrameCallback(callback: OnFirstFrameCallback)
 
     external fun setOnMLSFailureCallback(callback: MLSFailureCallback)
@@ -142,6 +148,8 @@ class NativeConnection {
     external fun setSelfMute(muted: Boolean)
 
     external fun setTransportOptions(optionsJSON: String)
+
+    external fun setUdpEndpoint(address: String, port: Int)
 
     external fun setVideoBroadcast(broadcasting: Boolean)
 
