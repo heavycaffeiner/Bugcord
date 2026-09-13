@@ -112,11 +112,13 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
 
-      - name: Publish submodule libraries to maven local
+      - name: Fetch the prebuilt toolchain
         run: |
-          chmod +x gradlew Bugcord-Hook/gradlew Bugcord-WebRTC/gradlew
-          ./gradlew -p Bugcord-Hook :core:publishToMavenLocal
-          ./gradlew -p Bugcord-WebRTC publishToMavenLocal
+          chmod +x tools/fetch-toolchain.sh
+          ./tools/fetch-toolchain.sh
+
+      - name: Stage the Discord APK
+        run: ./gradlew prepareDiscordApk
 
       - name: Build project
         env:

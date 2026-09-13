@@ -2,7 +2,8 @@ pluginManagement {
     repositories {
         google()
         gradlePluginPortal()
-        // Holds the build plugin and the hook and webrtc libraries built from the submodules.
+        // Holds the prebuilt artifacts tools/fetch-toolchain.sh downloads.
+        maven { url = uri("local-repo") }
         mavenLocal()
     }
 }
@@ -12,6 +13,8 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        // Holds the prebuilt artifacts tools/fetch-toolchain.sh downloads.
+        maven { url = uri("local-repo") }
         mavenLocal()
         // Holds the Discord APK the user supplied, staged by the prepareDiscordApk task.
         maven {
