@@ -229,8 +229,8 @@ jobs:
 
       - name: Deploy builds
         run: |
-          # Flatten downloaded artifacts
-          find $GITHUB_WORKSPACE/artifacts -type f -exec mv -t $GITHUB_WORKSPACE/artifacts '{}' +
+          # Flatten downloaded artifacts; files already at the top level stay put
+          find $GITHUB_WORKSPACE/artifacts -mindepth 2 -type f -exec mv -t $GITHUB_WORKSPACE/artifacts '{}' +
 
           # Copy over builds if version changed
           [ "${{ needs.inspect.outputs.coreDeploy }}" == "true" ] && cp $GITHUB_WORKSPACE/artifacts/Bugcord.zip $GITHUB_WORKSPACE/builds
