@@ -1,6 +1,8 @@
 package com.bugcord.coreplugins.voice
 
 import android.app.NotificationManager
+import android.content.pm.ServiceInfo
+import android.os.Build
 import com.bugcord.Logger
 import com.bugcord.api.PatcherAPI
 import com.bugcord.patcher.InsteadHook
@@ -131,7 +133,13 @@ internal object ScreenshareForeground {
                 ?.notification
                 ?: return logger.debug("No voice notification to re-post, cannot re-promote")
 
-            service.startForeground(NOTIFICATION_ID, notification)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val types = service.foregroundServiceType or
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+                service.startForeground(NOTIFICATION_ID, notification, types)
+            } else {
+                service.startForeground(NOTIFICATION_ID, notification)
+            }
 
             logger.debug("Voice service put back in the foreground")
         }.onFailure {
