@@ -2,7 +2,7 @@
 # Version of the build plugin built from the Bugcord-Gradle submodule.
 bugcord-gradle = "2.3.2"
 bugcordhook = "1.1.7"
-bugcordwebrtc = "1.0.1"
+bugcordwebrtc = "1.0.2"
 android-gradle = "8.13.2"
 desugar = "2.1.5"
 discord = "126021"

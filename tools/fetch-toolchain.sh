@@ -72,9 +72,9 @@ download "$HOST/Bugcord-Maven/releases/download/2.4.0/dex2jar-2.4.0.module" "com
 download "$HOST/Bugcord-Hook/releases/download/1.1.7/Bugcordhook-1.1.7.aar" "com/bugcord/Bugcordhook/1.1.7/Bugcordhook-1.1.7.aar"
 download "$HOST/Bugcord-Hook/releases/download/1.1.7/Bugcordhook-1.1.7.pom" "com/bugcord/Bugcordhook/1.1.7/Bugcordhook-1.1.7.pom"
 download "$HOST/Bugcord-Hook/releases/download/1.1.7/Bugcordhook-1.1.7.module" "com/bugcord/Bugcordhook/1.1.7/Bugcordhook-1.1.7.module"
-download "$HOST/Bugcord-WebRTC/releases/download/1.0.1/Bugcordwebrtc-1.0.1.aar" "com/bugcord/Bugcordwebrtc/1.0.1/Bugcordwebrtc-1.0.1.aar"
-download "$HOST/Bugcord-WebRTC/releases/download/1.0.1/Bugcordwebrtc-1.0.1.pom" "com/bugcord/Bugcordwebrtc/1.0.1/Bugcordwebrtc-1.0.1.pom"
-download "$HOST/Bugcord-WebRTC/releases/download/1.0.1/Bugcordwebrtc-1.0.1.module" "com/bugcord/Bugcordwebrtc/1.0.1/Bugcordwebrtc-1.0.1.module"
+download "$HOST/Bugcord-WebRTC/releases/download/1.0.2/Bugcordwebrtc-1.0.2.aar" "com/bugcord/Bugcordwebrtc/1.0.2/Bugcordwebrtc-1.0.2.aar"
+download "$HOST/Bugcord-WebRTC/releases/download/1.0.2/Bugcordwebrtc-1.0.2.pom" "com/bugcord/Bugcordwebrtc/1.0.2/Bugcordwebrtc-1.0.2.pom"
+download "$HOST/Bugcord-WebRTC/releases/download/1.0.2/Bugcordwebrtc-1.0.2.module" "com/bugcord/Bugcordwebrtc/1.0.2/Bugcordwebrtc-1.0.2.module"
 
 stage_discord_apk
 
