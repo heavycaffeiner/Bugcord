@@ -148,7 +148,7 @@ jobs:
         if: ${{ github.ref == 'refs/heads/main' && !cancelled() }}
         shell: bash # GLOBIGNORE is unique to bash
         env:
-          DOCS_REPO: heavycaffeiner/Bugcord-dokka
+          DOCS_REPO: thirdscam/Bugcord-dokka
           API_TOKEN: ${{ secrets.API_PAT_GITHUB }}
         run: |
           if [ -z "$API_TOKEN" ]; then
@@ -274,10 +274,10 @@ jobs:
   #       CLOUDFLARE_TOKEN: ${{ secrets.CLOUDFLARE_PURGE_TOKEN }}
   #       PURGE_URLS: |
   #         [
-  #           "https://raw.githubusercontent.com/heavycaffeiner/Bugcord/builds/data.json",
-  #           "https://raw.githubusercontent.com/heavycaffeiner/Bugcord/builds/Bugcord.zip",
-  #           "https://raw.githubusercontent.com/heavycaffeiner/Bugcord/builds/Injector.dex",
-  #           "https://raw.githubusercontent.com/heavycaffeiner/Bugcord/builds/patches.zip"
+  #           "https://raw.githubusercontent.com/thirdscam/Bugcord/builds/data.json",
+  #           "https://raw.githubusercontent.com/thirdscam/Bugcord/builds/Bugcord.zip",
+  #           "https://raw.githubusercontent.com/thirdscam/Bugcord/builds/Injector.dex",
+  #           "https://raw.githubusercontent.com/thirdscam/Bugcord/builds/patches.zip"
   #         ]
 
   maven:

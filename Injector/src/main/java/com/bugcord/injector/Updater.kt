@@ -6,9 +6,9 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.util.Locale
 
-private const val DATA_URL = "https://raw.githubusercontent.com/heavycaffeiner/Bugcord/builds/data.json"
-private const val CORE_URL = "https://raw.githubusercontent.com/heavycaffeiner/Bugcord/builds/Bugcord.zip"
-private const val USER_AGENT = "Bugcord Injector/${BuildConfig.VERSION} (https://github.com/heavycaffeiner/Bugcord)"
+private const val DATA_URL = "https://raw.githubusercontent.com/thirdscam/Bugcord/builds/data.json"
+private const val CORE_URL = "https://raw.githubusercontent.com/thirdscam/Bugcord/builds/Bugcord.zip"
+private const val USER_AGENT = "Bugcord Injector/${BuildConfig.VERSION} (https://github.com/thirdscam/Bugcord)"
 
 /**
  * Downloads the latest Bugcord core to [outputFile].

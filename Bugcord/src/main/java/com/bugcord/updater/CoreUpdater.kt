@@ -89,7 +89,7 @@ internal object CoreUpdater {
                 .setTitle("Updater")
                 .setDescription("Bugcord Manager is not installed on this device.\n" +
                     "Open latest Github releases to download Manager?")
-                .setOnOkListener { Utils.launchUrl("https://github.com/heavycaffeiner/Bugcord-Manager/releases/latest") }
+                .setOnOkListener { Utils.launchUrl("https://github.com/thirdscam/Bugcord-Manager/releases/latest") }
                 .show(Utils.appActivity.supportFragmentManager, "No Manager")
         }
     }
@@ -178,6 +178,6 @@ internal object CoreUpdater {
         var kotlinVersion: SemVer,
     )
 
-    private const val UPDATER_DATA_URL = "https://raw.githubusercontent.com/heavycaffeiner/Bugcord/builds/data.json"
-    private const val CORE_ZIP_URL = "https://raw.githubusercontent.com/heavycaffeiner/Bugcord/builds/Bugcord.zip"
+    private const val UPDATER_DATA_URL = "https://raw.githubusercontent.com/thirdscam/Bugcord/builds/data.json"
+    private const val CORE_ZIP_URL = "https://raw.githubusercontent.com/thirdscam/Bugcord/builds/Bugcord.zip"
 }

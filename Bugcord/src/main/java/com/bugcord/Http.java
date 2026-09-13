@@ -252,7 +252,7 @@ public class Http {
     /** Request Builder */
     public static class Request implements Closeable {
         private static final String USER_AGENT =
-            String.format("Bugcord/%s (https://github.com/heavycaffeiner/Bugcord)", BuildConfig.VERSION);
+            String.format("Bugcord/%s (https://github.com/thirdscam/Bugcord)", BuildConfig.VERSION);
 
         /** The connection of this Request */
         public final HttpURLConnection conn;

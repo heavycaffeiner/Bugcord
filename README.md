@@ -4,12 +4,12 @@
     <p>A mod for the Legacy Android Discord app.</p>
 
 [![Discord](https://img.shields.io/discord/811255666990907402?logo=discord&logoColor=white&style=for-the-badge&color=5865F2)](https://discord.gg/EsNDvBaHVU)
-[![GitHub Stars](https://img.shields.io/github/stars/heavycaffeiner/Bugcord?logo=github&style=for-the-badge&color=ffd663)](https://github.com/heavycaffeiner/Bugcord/stargazers)
-[![GitHub Forks](https://img.shields.io/github/forks/heavycaffeiner/Bugcord?logo=github&style=for-the-badge&color=975fff)](https://github.com/heavycaffeiner/Bugcord/forks)
-[![Build Status](https://img.shields.io/github/actions/workflow/status/heavycaffeiner/Bugcord/build.yml?label=Build&logo=github&style=for-the-badge&branch=main)](https://nightly.link/heavycaffeiner/Bugcord/workflows/build/main/app.zip)
-![GitHub Downloads](https://img.shields.io/github/downloads/heavycaffeiner/Bugcord/total?style=for-the-badge&logo=github)
-![Code Size](https://img.shields.io/github/languages/code-size/heavycaffeiner/Bugcord?style=for-the-badge&color=181717)
-[![GitHub License](https://img.shields.io/github/license/heavycaffeiner/Bugcord?style=for-the-badge&color=181717)](https://github.com/heavycaffeiner/Bugcord/blob/main/LICENSE)
+[![GitHub Stars](https://img.shields.io/github/stars/thirdscam/Bugcord?logo=github&style=for-the-badge&color=ffd663)](https://github.com/thirdscam/Bugcord/stargazers)
+[![GitHub Forks](https://img.shields.io/github/forks/thirdscam/Bugcord?logo=github&style=for-the-badge&color=975fff)](https://github.com/thirdscam/Bugcord/forks)
+[![Build Status](https://img.shields.io/github/actions/workflow/status/thirdscam/Bugcord/build.yml?label=Build&logo=github&style=for-the-badge&branch=main)](https://nightly.link/thirdscam/Bugcord/workflows/build/main/app.zip)
+![GitHub Downloads](https://img.shields.io/github/downloads/thirdscam/Bugcord/total?style=for-the-badge&logo=github)
+![Code Size](https://img.shields.io/github/languages/code-size/thirdscam/Bugcord?style=for-the-badge&color=181717)
+[![GitHub License](https://img.shields.io/github/license/thirdscam/Bugcord?style=for-the-badge&color=181717)](https://github.com/thirdscam/Bugcord/blob/main/LICENSE)
 
 </div>
 
@@ -39,7 +39,7 @@ Please note that this is a modification of a Discord App and is against Discord'
 While there has been no cases of anyone having their account banned, restricted, or otherwise
 punished by Discord for using Bugcord with the official plugins, use it at your own risk.
 
-1. Download and install the latest [Bugcord Manager app](https://github.com/heavycaffeiner/Bugcord-Manager/releases/latest) (separate repository)
+1. Download and install the latest [Bugcord Manager app](https://github.com/thirdscam/Bugcord-Manager/releases/latest) (separate repository)
     - Select an APK asset from the release such as `bugcord-manager-v*.*.*.apk`
     - Open the APK and install it once downloaded
     - If you have not enabled "Install from unknown sources" for your browser via system settings, do so now.
@@ -83,13 +83,13 @@ punished by Discord for using Bugcord with the official plugins, use it at your 
 
 ## 🛠 Building
 
-The hook library ([Bugcord-Hook](https://github.com/heavycaffeiner/Bugcord-Hook)) and the WebRTC
-classes ([Bugcord-WebRTC](https://github.com/heavycaffeiner/Bugcord-WebRTC)) live in their own
+The hook library ([Bugcord-Hook](https://github.com/thirdscam/Bugcord-Hook)) and the WebRTC
+classes ([Bugcord-WebRTC](https://github.com/thirdscam/Bugcord-WebRTC)) live in their own
 repositories and are vendored here as git submodules. Both have to be published to the local Maven
 repository before the core is built:
 
 ```shell
-git clone --recurse-submodules https://github.com/heavycaffeiner/Bugcord
+git clone --recurse-submodules https://github.com/thirdscam/Bugcord
 cd Bugcord
 ./gradlew -p Bugcord-Hook :core:publishToMavenLocal
 ./gradlew -p Bugcord-WebRTC publishToMavenLocal

@@ -62,7 +62,7 @@ class _ManagerDialogState extends State<ManagerDialog> {
           ),
           TextButton(
             onPressed: () =>
-                openUrl("https://github.com/heavycaffeiner/Bugcord-Manager/releases"),
+                openUrl("https://github.com/thirdscam/Bugcord-Manager/releases"),
             child: const Row(mainAxisSize: MainAxisSize.min, children: [
               Icon(Icons.file_download),
               Text(' Install Manager'),

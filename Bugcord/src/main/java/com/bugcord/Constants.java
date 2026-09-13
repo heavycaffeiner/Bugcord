@@ -30,7 +30,7 @@ public final class Constants {
     }
 
     /** Link to the Bugcord github repo */
-    public static final String BUGCORD_GITHUB_REPO = "https://github.com/heavycaffeiner/Bugcord";
+    public static final String BUGCORD_GITHUB_REPO = "https://github.com/thirdscam/Bugcord";
     /** Code of the Bugcord discord server */
     public static final String BUGCORD_SUPPORT = "EsNDvBaHVU";
     public static final long BUGCORD_GUILD_ID = 811255666990907402L;

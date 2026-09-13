@@ -37,7 +37,7 @@ internal class BadgesAPI(private val settings: SettingsAPI) {
      */
     private fun fetchBadges(): BadgesInfo? {
         return try {
-            Http.Request("https://raw.githubusercontent.com/heavycaffeiner/Bugcord/builds/badges.json")
+            Http.Request("https://raw.githubusercontent.com/thirdscam/Bugcord/builds/badges.json")
                 .setHeader("User-Agent", "Bugcord/${BuildConfig.VERSION}")
                 .execute()
                 .json(BadgesInfo::class.java)

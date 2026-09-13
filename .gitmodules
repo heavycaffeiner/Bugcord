@@ -1,18 +1,18 @@
 [submodule "Bugcord-Hook"]
 	path = Bugcord-Hook
-	url = https://github.com/heavycaffeiner/Bugcord-Hook
+	url = https://github.com/thirdscam/Bugcord-Hook
 [submodule "Bugcord-WebRTC"]
 	path = Bugcord-WebRTC
-	url = https://github.com/heavycaffeiner/Bugcord-WebRTC
+	url = https://github.com/thirdscam/Bugcord-WebRTC
 [submodule "Bugcord-Gradle"]
 	path = Bugcord-Gradle
-	url = https://github.com/heavycaffeiner/Bugcord-Gradle
+	url = https://github.com/thirdscam/Bugcord-Gradle
 [submodule "Bugcord-axml"]
 	path = Bugcord-axml
-	url = https://github.com/heavycaffeiner/Bugcord-axml
+	url = https://github.com/thirdscam/Bugcord-axml
 [submodule "Bugcord-binary-resources"]
 	path = Bugcord-binary-resources
-	url = https://github.com/heavycaffeiner/Bugcord-binary-resources
+	url = https://github.com/thirdscam/Bugcord-binary-resources
 [submodule "Bugcord-libsu"]
 	path = Bugcord-libsu
-	url = https://github.com/heavycaffeiner/Bugcord-libsu
+	url = https://github.com/thirdscam/Bugcord-libsu

@@ -361,7 +361,7 @@ internal class Polls : CorePlugin(Manifest("Polls")) {
             // This checks a user's permissions before adding the polls tab
             // Without 1.3.1 smali patches, these permission checks will fail to account for an
             // admin/owner user, so we disable them for older versions.
-            // ref: https://github.com/heavycaffeiner/Bugcord/pull/639
+            // ref: https://github.com/thirdscam/Bugcord/pull/639
             if (ManagerBuild.hasPatches("1.3.1")) {
                 val channel = StoreStream.getChannelsSelected().selectedChannel
                     ?: return@after

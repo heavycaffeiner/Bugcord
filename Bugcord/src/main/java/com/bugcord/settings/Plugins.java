@@ -427,7 +427,7 @@ public class Plugins extends SettingsPage {
         new ConfirmDialog()
             .setTitle("Not Found")
             .setDescription(desc)
-            .setOnOkListener(widget -> Utils.launchUrl("https://github.com/heavycaffeiner/Bugcord-Manager/releases/latest"))
+            .setOnOkListener(widget -> Utils.launchUrl("https://github.com/thirdscam/Bugcord-Manager/releases/latest"))
             .show(getParentFragmentManager(), "No Manager");
     }
 }

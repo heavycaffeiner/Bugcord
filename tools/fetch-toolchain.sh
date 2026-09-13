@@ -4,7 +4,7 @@
 # script once before Gradle can resolve anything.
 set -euo pipefail
 
-HOST="${BUGCORD_ARTIFACT_HOST:-https://github.com/heavycaffeiner}"
+HOST="${BUGCORD_ARTIFACT_HOST:-https://github.com/thirdscam}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 DISCORD_APK_SHA256="07a24b005ae0aca13d02161424111692ab2667be0724d598c914620d35c2ae03"

@@ -62,7 +62,7 @@ class Asset {
 }
 
 class GithubAPI with ChangeNotifier {
-  static const _org = 'heavycaffeiner';
+  static const _org = 'thirdscam';
   static const _repo = 'Bugcord';
 
   static const _apiHost = 'api.github.com';
@@ -76,7 +76,7 @@ class GithubAPI with ChangeNotifier {
   void checkForUpdates() async {
     final release = await getLatestRelease();
     if (release == null) return;
-    if (release.body.contains('heavycaffeiner/Bugcord-Manager')) {
+    if (release.body.contains('thirdscam/Bugcord-Manager')) {
       managerReleased = true;
       return showDialog(
           context: navigatorKey.currentContext!,

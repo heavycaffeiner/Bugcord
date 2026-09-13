@@ -1,7 +1,7 @@
 blank_issues_enabled: false
 contact_links:
   - name: Plugin Request
-    url: https://github.com/heavycaffeiner/Bugcord/issues/new?template=plugin_request.yml
+    url: https://github.com/thirdscam/Bugcord/issues/new?template=plugin_request.yml
     about: Create a plugin request for a feature that should not be built into Bugcord by default.
   - name: Bugcord Support Server
     url: https://discord.gg/EsNDvBaHVU

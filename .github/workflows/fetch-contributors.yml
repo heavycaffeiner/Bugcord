@@ -22,7 +22,7 @@ jobs:
 
       - name: Fetch & Update Contributors
         env:
-          ORG: heavycaffeiner
+          ORG: thirdscam
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "Discovering repositories for organization: $ORG..."
