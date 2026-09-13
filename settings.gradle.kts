@@ -16,6 +16,10 @@ dependencyResolutionManagement {
         // Holds the prebuilt artifacts tools/fetch-toolchain.sh downloads.
         maven { url = uri("local-repo") }
         mavenLocal()
+        maven {
+            name = "aliucord"
+            url = uri("https://maven.aliucord.com/releases")
+        }
         // Holds the Discord APK the user supplied, staged by the prepareDiscordApk task.
         maven {
             name = "localDiscord"
