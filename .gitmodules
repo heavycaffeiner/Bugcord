@@ -4,3 +4,15 @@
 [submodule "Bugcord-WebRTC"]
 	path = Bugcord-WebRTC
 	url = https://github.com/heavycaffeiner/Bugcord-WebRTC
+[submodule "Bugcord-Gradle"]
+	path = Bugcord-Gradle
+	url = https://github.com/heavycaffeiner/Bugcord-Gradle
+[submodule "Bugcord-axml"]
+	path = Bugcord-axml
+	url = https://github.com/heavycaffeiner/Bugcord-axml
+[submodule "Bugcord-binary-resources"]
+	path = Bugcord-binary-resources
+	url = https://github.com/heavycaffeiner/Bugcord-binary-resources
+[submodule "Bugcord-libsu"]
+	path = Bugcord-libsu
+	url = https://github.com/heavycaffeiner/Bugcord-libsu

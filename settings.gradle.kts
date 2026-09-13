@@ -2,10 +2,8 @@ pluginManagement {
     repositories {
         google()
         gradlePluginPortal()
-        maven {
-            name = "bugcord"
-            url = uri("https://maven.aliucord.com/releases")
-        }
+        // Holds the build plugin and the hook and webrtc libraries built from the submodules.
+        mavenLocal()
     }
 }
 
@@ -14,11 +12,11 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
-        // Holds the locally published hook library built from the Bugcord-Hook submodule.
         mavenLocal()
+        // Holds the Discord APK the user supplied, staged by the prepareDiscordApk task.
         maven {
-            name = "bugcord"
-            url = uri("https://maven.aliucord.com/releases")
+            name = "localDiscord"
+            url = uri("Original/maven")
         }
     }
 }

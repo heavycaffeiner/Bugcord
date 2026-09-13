@@ -87,24 +87,3 @@ mavenPublishing {
         includedBuildTypeValues = setOf("debug"),
     ))
 }
-
-publishing {
-    repositories {
-        maven {
-            name = "bugcord"
-            url = uri("https://maven.aliucord.com/releases")
-            credentials {
-                username = System.getenv("MAVEN_RELEASES_USERNAME")
-                password = System.getenv("MAVEN_RELEASES_PASSWORD")
-            }
-        }
-        maven {
-            name = "bugcordSnapshots"
-            url = uri("https://maven.aliucord.com/snapshots")
-            credentials {
-                username = System.getenv("MAVEN_SNAPSHOTS_USERNAME")
-                password = System.getenv("MAVEN_SNAPSHOTS_PASSWORD")
-            }
-        }
-    }
-}

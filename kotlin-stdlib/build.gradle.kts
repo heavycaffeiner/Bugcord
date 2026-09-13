@@ -1,5 +1,5 @@
-import com.aliucord.gradle.SensitiveAliucordApi
-import com.aliucord.gradle.task.CompileDexTask
+import com.bugcord.gradle.SensitiveBugcordApi
+import com.bugcord.gradle.task.CompileDexTask
 
 plugins {
     alias(libs.plugins.android.library)
@@ -25,7 +25,7 @@ dependencies {
 val compileDexTask = tasks.register("compileDex", CompileDexTask::class) {
     group = "bugcord-internal"
 
-    @OptIn(SensitiveAliucordApi::class)
+    @OptIn(SensitiveBugcordApi::class)
     scanDependencies = false
 
     outputDir.set(intermediates.map { it.dir("dex") })

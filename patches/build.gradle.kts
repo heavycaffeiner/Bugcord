@@ -1,4 +1,4 @@
-import com.aliucord.gradle.task.adb.DeployComponentTask
+import com.bugcord.gradle.task.adb.DeployComponentTask
 import org.gradle.api.internal.file.FileOperations
 import org.gradle.kotlin.dsl.support.serviceOf
 import java.io.ByteArrayOutputStream
