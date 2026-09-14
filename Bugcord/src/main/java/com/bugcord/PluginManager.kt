@@ -13,6 +13,7 @@ import com.bugcord.Utils.appContext
 import com.bugcord.coreplugins.*
 import com.bugcord.coreplugins.chat.ModernTheme
 import com.bugcord.coreplugins.chat.RichMessageRenderer
+import com.bugcord.coreplugins.commands.RemoteSlashCommands
 import com.bugcord.coreplugins.forwardedmessages.ForwardAction
 import com.bugcord.coreplugins.accountstanding.AccountStanding
 import com.bugcord.coreplugins.badges.DiscordBadges
@@ -305,6 +306,7 @@ object PluginManager {
             RichMessageRenderer(),
             ModernTheme(),
             ForwardAction(),
+            RemoteSlashCommands(),
             CoreFixes(),
             CoreFeatures(),
             AccountStanding(),
