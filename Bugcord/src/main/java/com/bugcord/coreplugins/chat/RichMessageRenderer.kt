@@ -54,13 +54,16 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
             ChatListEntry::class.java,
         ) { param ->
             val holder = param.thisObject as WidgetChatListAdapterItemMessage
+            val position = param.args[0] as? Int ?: return@after
             val entry = param.args[1] as? MessageEntry ?: return@after
             val itemView = holder.itemView
             val base = originalPadding.getOrPut(itemView) {
                 Padding(itemView.paddingLeft, itemView.paddingTop, itemView.paddingRight, itemView.paddingBottom)
             }
-            val extra = if (entry.isMinimal()) 0 else dp(itemView, 16)
-            itemView.setPadding(base.left, base.top, base.right, base.bottom + extra)
+            // A non-minimal row starts a new author group. Put the group gap before it,
+            // while keeping the follower chain connected through the base bottom padding.
+            val extra = if (position > 0 && !entry.isMinimal()) dp(itemView, 6) else 0
+            itemView.setPadding(base.left, base.top + extra, base.right, base.bottom)
         }
     }
 
