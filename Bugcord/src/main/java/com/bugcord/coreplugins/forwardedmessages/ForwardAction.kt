@@ -55,9 +55,10 @@ internal class ForwardAction : CorePlugin(Manifest("ForwardAction")) {
             }
 
             val entry = makeEntry(layout.context) {
+                // A DM message has no guild; 0 tells the picker to offer private channels
                 WidgetChannelSelector.Companion!!.launchForText(
                     this,
-                    message.guildId,
+                    message.guildId ?: 0L,
                     RESULT_KEY,
                     false,
                     0,

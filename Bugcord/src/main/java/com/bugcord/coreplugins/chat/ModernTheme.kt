@@ -7,8 +7,10 @@
 package com.bugcord.coreplugins.chat
 
 import android.content.Context
+import android.content.res.Resources
 import android.content.res.TypedArray
-import android.graphics.Color
+import android.graphics.drawable.ColorDrawable
+import android.graphics.drawable.Drawable
 import com.bugcord.entities.CorePlugin
 import com.bugcord.patcher.Patcher
 import com.discord.stores.StoreStream
@@ -30,6 +32,7 @@ internal class ModernTheme : CorePlugin(Manifest("ModernTheme")) {
     override fun start(context: Context) {
         patchColorCompat()
         patchTypedArray()
+        patchResources()
     }
 
     /** Covers code paths that resolve theme attributes, which is most of the Discord UI. */
@@ -49,7 +52,11 @@ internal class ModernTheme : CorePlugin(Manifest("ModernTheme")) {
         }
     }
 
-    /** Covers colors that views read straight out of inflated XML. */
+    /**
+     * Covers colors read straight out of inflated XML. A `background` attribute pointing at a color
+     * never reaches any getColor call: the resource system turns it into a ColorDrawable, so that
+     * drawable has to be repainted too.
+     */
     private fun patchTypedArray() {
         runCatching {
             val getColor = TypedArray::class.java.getDeclaredMethod(
@@ -64,6 +71,54 @@ internal class ModernTheme : CorePlugin(Manifest("ModernTheme")) {
                 }
             })
         }
+
+        runCatching {
+            val getDrawable = TypedArray::class.java.getDeclaredMethod(
+                "getDrawable",
+                Int::class.javaPrimitiveType,
+            )
+            Patcher.addPatch(getDrawable, object : XC_MethodHook() {
+                override fun afterHookedMethod(param: MethodHookParam) {
+                    param.result = remapDrawable(param.result)
+                }
+            })
+        }
+    }
+
+    /** Covers direct resource lookups, including the ColorDrawable the theme builds for a view. */
+    private fun patchResources() {
+        val colorHook = object : XC_MethodHook() {
+            override fun afterHookedMethod(param: MethodHookParam) {
+                val color = param.result as? Int ?: return
+                param.result = remap(color)
+            }
+        }
+        for (method in Resources::class.java.declaredMethods) {
+            if (method.name == "getColor" && method.returnType == Int::class.javaPrimitiveType) {
+                runCatching { Patcher.addPatch(method, colorHook) }
+            }
+        }
+
+        for (method in Resources::class.java.declaredMethods) {
+            if (method.name == "getDrawable" && Drawable::class.java.isAssignableFrom(method.returnType)) {
+                runCatching {
+                    Patcher.addPatch(method, object : XC_MethodHook() {
+                        override fun afterHookedMethod(param: MethodHookParam) {
+                            param.result = remapDrawable(param.result)
+                        }
+                    })
+                }
+            }
+        }
+    }
+
+    /** Repaints a flat color drawable, leaving every other drawable untouched. */
+    private fun remapDrawable(drawable: Any?): Any? {
+        val colorDrawable = drawable as? ColorDrawable ?: return drawable
+        val replacement = remap(colorDrawable.color)
+        if (replacement == colorDrawable.color) return drawable
+        // Mutating the shared instance would leak into every other user of this resource
+        return ColorDrawable(replacement)
     }
 
     /** Returns the modern equivalent of [color], or [color] itself when it is not a mapped token. */
@@ -89,18 +144,19 @@ internal class ModernTheme : CorePlugin(Manifest("ModernTheme")) {
         /**
          * Legacy 126021 grey to Discord 344013 "Darker" grey.
          * Left column is the legacy `primary_dark_*` ramp, right column the modern palette.
-         * Darker, not Dark: the surfaces drop to near black and the greys shift blue.
+         * Darker anchors the chat canvas on the tone Dark uses for its server rail, so every
+         * surface drops one full step and the frame bottoms out at black.
          */
         val PALETTE: Map<Int, Int> = mapOf(
             // Surfaces
-            0x36393F to 0x1A1B1E, // background primary, chat area
-            0x2F3136 to 0x131416, // background secondary, channel list
-            0x292B2F to 0x0F1014, // background secondary alt, guild list
-            0x202225 to 0x0A0A0C, // background tertiary
-            0x18191C to 0x070709, // background floating
+            0x36393F to 0x1E1F22, // background primary, chat area
+            0x2F3136 to 0x181A1D, // background secondary, channel list
+            0x292B2F to 0x131416, // background secondary alt, guild list
+            0x202225 to 0x111214, // background tertiary
+            0x18191C to 0x0C0D0F, // background floating
             0x040405 to 0x000000, // deepest background
-            0x40444B to 0x242529, // chat input, elevated controls
-            0x4F545C to 0x6C6F7C, // modifier accent, muted interactive
+            0x40444B to 0x27292D, // chat input, elevated controls
+            0x4F545C to 0x4E5058, // modifier accent, muted interactive
             // Text. Pure white stays untouched: it also paints icons and active states
             0xDCDDDE to 0xDBDEE1, // text normal
             0xB9BBBE to 0xB5BAC1, // header secondary, interactive normal

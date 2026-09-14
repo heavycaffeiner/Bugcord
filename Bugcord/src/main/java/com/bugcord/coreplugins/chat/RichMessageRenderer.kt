@@ -50,6 +50,7 @@ import com.discord.simpleast.core.parser.Rule
 import com.discord.stores.StoreMessageState
 import com.discord.stores.StoreStream
 import com.discord.utilities.embed.EmbedResourceUtils
+import com.discord.utilities.spans.BlockBackgroundSpan
 import com.discord.utilities.spans.VerticalPaddingSpan
 import com.discord.utilities.textprocessing.DiscordParser
 import com.discord.utilities.textprocessing.Rules
@@ -80,6 +81,7 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
         patchListItemRule()
         patchBoldRendering()
         patchHeaderRendering()
+        patchCodeBlockPadding()
         configureParser()
         patchMessageLayout()
         patchEmbedRendering()
@@ -172,6 +174,39 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
         val maskedLinkParser = createParser.invoke(null, true, true, true, true, true)
         ReflectUtils.setFinalField(parserClass, null, "SAFE_LINK_PARSER", safeLinkParser)
         ReflectUtils.setFinalField(parserClass, null, "MASKED_LINK_PARSER", maskedLinkParser)
+    }
+
+    /**
+     * A code block renders a trailing newline inside its own background span, so the block paints
+     * one empty line past its last line of code and the 5dp bottom padding sits below that. Pull
+     * the block spans back off the newline; the newline itself stays so the block still separates
+     * from whatever follows.
+     */
+    private fun patchCodeBlockPadding() {
+        runCatching {
+            val node = Class.forName("com.discord.utilities.textprocessing.node.BlockBackgroundNode")
+            val render = node.getDeclaredMethod(
+                "render",
+                SpannableStringBuilder::class.java,
+                BasicRenderContext::class.java,
+            )
+            Patcher.addPatch(render, object : XC_MethodHook() {
+                override fun afterHookedMethod(param: MethodHookParam) {
+                    val builder = param.args[0] as? SpannableStringBuilder ?: return
+                    val end = builder.length
+                    if (end == 0 || builder[end - 1] != '\n') return
+
+                    for (span in builder.getSpans(0, end, Any::class.java)) {
+                        if (span !is BlockBackgroundSpan && span !is VerticalPaddingSpan) continue
+                        if (builder.getSpanEnd(span) != end) continue
+                        val start = builder.getSpanStart(span)
+                        val flags = builder.getSpanFlags(span)
+                        if (start >= end - 1) continue
+                        builder.setSpan(span, start, end - 1, flags)
+                    }
+                }
+            })
+        }
     }
 
     private fun patchMessageLayout() {
@@ -558,6 +593,15 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
 
                 cardView?.visibility = View.VISIBLE
                 imageView?.adjustViewBounds = true
+
+                // The card ships a 5dp bottom margin that stacks on the row spacing, which reads as
+                // a gap between the message and its embed
+                (cardView?.layoutParams as? ViewGroup.MarginLayoutParams)?.let { params ->
+                    if (params.bottomMargin != 0) {
+                        params.bottomMargin = 0
+                        cardView.layoutParams = params
+                    }
+                }
 
                 if (mediaView?.visibility != View.VISIBLE) {
                     contentView?.visibility = View.VISIBLE
