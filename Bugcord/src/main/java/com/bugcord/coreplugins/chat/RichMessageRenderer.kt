@@ -17,24 +17,23 @@ import com.discord.widgets.chat.list.adapter.WidgetChatListAdapterItemEmbed
 import com.discord.widgets.chat.list.adapter.WidgetChatListAdapterItemMessage
 import com.discord.widgets.chat.list.entries.ChatListEntry
 import com.discord.widgets.chat.list.entries.MessageEntry
-import java.util.WeakHashMap
 import java.util.regex.Pattern
+
 /** Enables the legacy parser's message header/list rules for normal messages. */
 internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer")) {
     override val isHidden = true
     override val isRequired = true
-
-    private val originalPadding = WeakHashMap<View, Padding>()
 
     override fun start(context: Context) {
         configureParser()
         patchAvatarGroupSpacing()
         patchEmbedVisibility()
     }
+
     private fun configureParser() {
         runCatching {
             val rulesClass = Class.forName("com.discord.utilities.textprocessing.Rules")
-            val modernListPattern = Pattern.compile("^([^\\S\\r\\n]*)[*-][ \\t]+(.*)(?=\\n|$)")
+            val modernListPattern = Pattern.compile("^([^\\S\\r\\n]*)[*-][ \\t]+(.*?)(\\n|$)")
             ReflectUtils.setFinalField(rulesClass, null, "PATTERN_LIST_ITEM", modernListPattern)
         }
 
@@ -64,13 +63,17 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
             val position = param.args[0] as? Int ?: return@after
             val entry = param.args[1] as? MessageEntry ?: return@after
             val itemView = holder.itemView
-            val base = originalPadding.getOrPut(itemView) {
-                Padding(itemView.paddingLeft, itemView.paddingTop, itemView.paddingRight, itemView.paddingBottom)
+
+            // All continuing messages have a uniform 2dp top and 2dp bottom padding,
+            // resulting in an exact 4dp gap between every pair of messages in a group.
+            // A non-minimal row starts a new author group with a 16dp gap before it.
+            val top = if (!entry.isMinimal()) {
+                if (position > 0) dp(itemView, 16) else dp(itemView, 8)
+            } else {
+                dp(itemView, 2)
             }
-            // A non-minimal row starts a new author group. Put the group gap before it,
-            // while keeping the follower chain connected through the base bottom padding.
-            val extra = if (position > 0 && !entry.isMinimal()) dp(itemView, 6) else 0
-            itemView.setPadding(base.left, base.top + extra, base.right, base.bottom)
+            val bottom = dp(itemView, 2)
+            itemView.setPadding(itemView.paddingLeft, top, itemView.paddingRight, bottom)
         }
     }
 
@@ -93,10 +96,7 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
 
     private fun dp(view: View, value: Int): Int = (value * view.resources.displayMetrics.density).toInt()
 
-    private data class Padding(val left: Int, val top: Int, val right: Int, val bottom: Int)
-
     override fun stop(context: Context) {
-        originalPadding.clear()
         patcher.unpatchAll()
     }
 }
