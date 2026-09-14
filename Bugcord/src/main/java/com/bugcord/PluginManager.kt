@@ -11,7 +11,9 @@ import android.content.res.AssetManager
 import android.content.res.Resources
 import com.bugcord.Utils.appContext
 import com.bugcord.coreplugins.*
+import com.bugcord.coreplugins.chat.ModernTheme
 import com.bugcord.coreplugins.chat.RichMessageRenderer
+import com.bugcord.coreplugins.forwardedmessages.ForwardAction
 import com.bugcord.coreplugins.accountstanding.AccountStanding
 import com.bugcord.coreplugins.badges.DiscordBadges
 import com.bugcord.coreplugins.badges.SupporterBadges
@@ -301,6 +303,8 @@ object PluginManager {
     fun loadCorePlugins(context: Context) {
         val corePlugins = arrayOf(
             RichMessageRenderer(),
+            ModernTheme(),
+            ForwardAction(),
             CoreFixes(),
             CoreFeatures(),
             AccountStanding(),

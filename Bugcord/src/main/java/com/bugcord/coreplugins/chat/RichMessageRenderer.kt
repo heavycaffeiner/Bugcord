@@ -11,15 +11,18 @@ import android.content.res.Resources
 import android.graphics.Color
 import android.graphics.Typeface
 import android.text.SpannableStringBuilder
+import android.text.Spanned
 import android.text.TextPaint
 import android.text.style.MetricAffectingSpan
-import android.text.style.StyleSpan
+import android.text.style.RelativeSizeSpan
 import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.constraintlayout.widget.ConstraintLayout
+import androidx.core.content.res.ResourcesCompat
+import com.bugcord.Constants
 import com.bugcord.Utils
 import com.bugcord.entities.CorePlugin
 import com.bugcord.patcher.Patcher
@@ -47,6 +50,7 @@ import com.discord.simpleast.core.parser.Rule
 import com.discord.stores.StoreMessageState
 import com.discord.stores.StoreStream
 import com.discord.utilities.embed.EmbedResourceUtils
+import com.discord.utilities.spans.VerticalPaddingSpan
 import com.discord.utilities.textprocessing.DiscordParser
 import com.discord.utilities.textprocessing.Rules
 import com.discord.utilities.textprocessing.node.BasicRenderContext
@@ -54,6 +58,7 @@ import com.discord.utilities.textprocessing.node.BulletListNode
 import com.discord.widgets.chat.list.InlineMediaView
 import com.discord.widgets.chat.list.adapter.WidgetChatListAdapterItemEmbed
 import com.discord.widgets.chat.list.adapter.WidgetChatListAdapterItemMessage
+import com.discord.widgets.chat.list.adapter.WidgetChatListAdapterItemSticker
 import com.discord.widgets.chat.list.entries.AttachmentEntry
 import com.discord.widgets.chat.list.entries.ChatListEntry
 import com.discord.widgets.chat.list.entries.EmbedEntry
@@ -74,6 +79,7 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
         // Must run before any parser is built so every cached parser picks up the fixed rules
         patchListItemRule()
         patchBoldRendering()
+        patchHeaderRendering()
         configureParser()
         patchMessageLayout()
         patchEmbedRendering()
@@ -91,15 +97,60 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
     }
 
     /**
-     * `**bold**` produces a StyleSpan only. The chat font resolves to a non-bold typeface, so the
-     * span changes nothing visible; force stroke-level bolding as a fallback.
+     * The chat font family has no bold face, so `StyleSpan(BOLD)` resolves to the same glyphs and
+     * `**bold**` renders identically to body text. Replace the span with one that loads the real
+     * bold face and also enables stroke emboldening.
      */
     private fun patchBoldRendering() {
         runCatching {
             val boldStyles = Class.forName("b.a.t.b.b.a").getDeclaredMethod("invoke")
             Patcher.addPatch(boldStyles, object : XC_MethodHook() {
                 override fun afterHookedMethod(param: MethodHookParam) {
-                    param.result = listOf(StyleSpan(Typeface.BOLD), ForcedBoldSpan())
+                    param.result = listOf(BoldSpan())
+                }
+            })
+        }
+    }
+
+    /**
+     * 344013 sizes headers relative to the body text: h1 is 1.5x, h2 1.25x, h3 1.1x, all bold, and
+     * only h1 and h2 carry extra vertical padding. The legacy build uses fixed 20sp/16sp/16sp
+     * appearances with 16sp padding on every level, which reads far heavier.
+     */
+    private fun patchHeaderRendering() {
+        runCatching {
+            val headerNode = Class.forName("com.discord.utilities.textprocessing.node.HeaderNode")
+            val fIndicators = headerNode.getDeclaredField("numHeaderIndicators").apply { isAccessible = true }
+            val render = headerNode.getDeclaredMethod(
+                "render",
+                SpannableStringBuilder::class.java,
+                BasicRenderContext::class.java,
+            )
+            Patcher.addPatch(render, object : XC_MethodHook() {
+                override fun beforeHookedMethod(param: MethodHookParam) {
+                    val node = param.thisObject as? Node<*> ?: return
+                    val builder = param.args[0] as? SpannableStringBuilder ?: return
+                    val context = (param.args[1] as? BasicRenderContext)?.context ?: return
+                    val level = fIndicators.getInt(node)
+
+                    val start = builder.length
+                    node.children?.forEach { child ->
+                        @Suppress("UNCHECKED_CAST")
+                        (child as Node<Any>).render(builder, param.args[1])
+                    }
+
+                    val scale = when (level) {
+                        1 -> 1.5f
+                        2 -> 1.25f
+                        else -> 1.1f
+                    }
+                    // h3 sits tight against its body text in 344013
+                    val padding = if (level >= 3) 0 else dpToPx(context, 8)
+
+                    builder.setSpan(RelativeSizeSpan(scale), start, builder.length, SPAN_FLAGS)
+                    builder.setSpan(BoldSpan(), start, builder.length, SPAN_FLAGS)
+                    builder.setSpan(VerticalPaddingSpan(padding, padding), start, builder.length, SPAN_FLAGS)
+                    param.result = null
                 }
             })
         }
@@ -220,20 +271,26 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
         }
     }
 
+    /**
+     * Scales only what overflows the viewport. An image narrower than the maximum keeps its own
+     * pixel size, so a small bot embed stays small instead of stretching to the screen width.
+     */
     private fun scaledSize(view: View, width: Int, height: Int): Pair<Int, Int> {
         if (width <= 0 || height <= 0) {
             return ViewGroup.LayoutParams.WRAP_CONTENT to ViewGroup.LayoutParams.WRAP_CONTENT
         }
         val utils = EmbedResourceUtils.INSTANCE
-        val scaled = utils.calculateScaledSize(
-            width,
-            height,
-            utils.computeMaximumImageWidthPx(view.context),
-            utils.getMAX_IMAGE_VIEW_HEIGHT_PX(),
-            view.resources,
-            0,
-        )
-        return scaled.first to scaled.second
+        val density = view.resources.displayMetrics.density
+        val maxWidth = utils.computeMaximumImageWidthPx(view.context)
+        val maxHeight = utils.getMAX_IMAGE_VIEW_HEIGHT_PX()
+
+        // Embed dimensions are in density-independent units; convert before comparing to px bounds
+        val naturalWidth = (width * density).toInt()
+        val naturalHeight = (height * density).toInt()
+        if (naturalWidth <= maxWidth && naturalHeight <= maxHeight) return naturalWidth to naturalHeight
+
+        val scale = minOf(maxWidth.toFloat() / naturalWidth, maxHeight.toFloat() / naturalHeight)
+        return (naturalWidth * scale).toInt() to (naturalHeight * scale).toInt()
     }
 
     /** Attachments and embeds that the message row draws itself, in render order. */
@@ -296,9 +353,11 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
             content.startsWith("```")
 
         // Top padding:
-        // 2dp for messages with media or markdown headers/lists (avoids excessive top spacing)
-        // 4dp for normal new author groups (prevents end message of previous group from having a large bottom gap)
+        // 4dp for media messages so the image is not glued to the header
+        // 2dp for markdown headers and lists, which already carry their own leading space
+        // 4dp for normal new author groups
         val top = when {
+            hasInlineMedia -> dp(itemView, 4)
             hasMarkdownOrEmbed -> dp(itemView, 2)
             position > 0 -> dp(itemView, 4)
             else -> dp(itemView, 2)
@@ -362,9 +421,11 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
             }
         }
 
-        // Keep small images small in the viewport by setting minWidth to 0 (prevents upscaling to half-screen width)
+        // An image that already fits the viewport keeps its own size. The stock implementation
+        // upscales anything below half the maximum width, which blows small bot embeds up to the
+        // full screen width.
         runCatching {
-            patcher.before<EmbedResourceUtils>(
+            patcher.after<EmbedResourceUtils>(
                 "calculateScaledSize",
                 Int::class.javaPrimitiveType!!,
                 Int::class.javaPrimitiveType!!,
@@ -373,7 +434,19 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
                 Resources::class.java,
                 Int::class.javaPrimitiveType!!,
             ) { param ->
-                param.args[5] = 0
+                val width = param.args[0] as? Int ?: return@after
+                val height = param.args[1] as? Int ?: return@after
+                val maxWidth = param.args[2] as? Int ?: return@after
+                val maxHeight = param.args[3] as? Int ?: return@after
+                val resources = param.args[4] as? Resources ?: return@after
+                if (width <= 0 || height <= 0) return@after
+
+                val density = resources.displayMetrics.density
+                val naturalWidth = (width * density).toInt()
+                val naturalHeight = (height * density).toInt()
+                if (naturalWidth <= maxWidth && naturalHeight <= maxHeight) {
+                    param.result = Pair(naturalWidth, naturalHeight)
+                }
             }
         }
 
@@ -441,23 +514,35 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
             }
         }
 
-        // Hook configureUI directly to ensure item view stays visible and unpadded
+        // Hook configureUI directly so the item view stays visible with the intended spacing
         runCatching {
             val modelClass = Class.forName("com.discord.widgets.chat.list.adapter.WidgetChatListAdapterItemEmbed\$Model")
             val configureUIMethod = WidgetChatListAdapterItemEmbed::class.java.getDeclaredMethod("configureUI", modelClass)
             configureUIMethod.isAccessible = true
             Patcher.addPatch(configureUIMethod, object : XC_MethodHook() {
-                override fun beforeHookedMethod(param: MethodHookParam) {
+                override fun beforeHookedMethod(param: MethodHookParam) = applyEmbedPadding(param)
+
+                override fun afterHookedMethod(param: MethodHookParam) = applyEmbedPadding(param)
+
+                private fun applyEmbedPadding(param: MethodHookParam) {
                     val holder = param.thisObject as? WidgetChatListAdapterItemEmbed ?: return
                     holder.itemView.visibility = View.VISIBLE
-                    holder.itemView.setPadding(0, 0, 0, 0)
-                }
-                override fun afterHookedMethod(param: MethodHookParam) {
-                    val holder = param.thisObject as? WidgetChatListAdapterItemEmbed ?: return
-                    holder.itemView.visibility = View.VISIBLE
-                    holder.itemView.setPadding(0, 0, 0, 0)
+                    holder.itemView.setPadding(0, dp(holder.itemView, 4), 0, 0)
                 }
             })
+        }
+
+        // Stickers render in their own row and need the same leading gap as media
+        runCatching {
+            patcher.after<WidgetChatListAdapterItemSticker>(
+                "onConfigure",
+                Int::class.javaPrimitiveType!!,
+                ChatListEntry::class.java,
+            ) { param ->
+                val holder = param.thisObject as WidgetChatListAdapterItemSticker
+                val view = holder.itemView
+                view.setPadding(view.paddingLeft, dp(view, 4), view.paddingRight, view.paddingBottom)
+            }
         }
 
         val fBinding = runCatching {
@@ -475,7 +560,8 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
             val entry = param.args[1] as? EmbedEntry ?: return@after
             val embed = entry.embed
             holder.itemView.visibility = View.VISIBLE
-            holder.itemView.setPadding(0, 0, 0, 0)
+            // Match the media message spacing so a standalone embed row is not glued to the header
+            holder.itemView.setPadding(0, dp(holder.itemView, 4), 0, 0)
 
             if (fBinding != null) {
                 val binding = fBinding.get(holder) ?: return@after
@@ -531,8 +617,15 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
 
     private fun dp(view: View, value: Int): Int = (value * view.resources.displayMetrics.density).toInt()
 
+    private fun dpToPx(context: Context, value: Int): Int =
+        (value * context.resources.displayMetrics.density).toInt()
+
     override fun stop(context: Context) {
         patcher.unpatchAll()
+    }
+
+    private companion object {
+        const val SPAN_FLAGS = Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
     }
 }
 
@@ -549,13 +642,35 @@ private class ListItemRule<T : BasicRenderContext, S : Any> :
     }
 }
 
-/** Bolds text at stroke level when the resolved typeface has no bold variant. */
-private class ForcedBoldSpan : MetricAffectingSpan() {
-    override fun updateDrawState(paint: TextPaint) = force(paint)
+/**
+ * Renders bold text with the real bold face. The chat font family has no bold variant, so
+ * `StyleSpan(BOLD)` alone leaves the glyphs unchanged while still reporting a bold typeface,
+ * which defeats any check based on `Typeface.isBold`. Stroke emboldening is applied
+ * unconditionally so the weight is visible even if the font fails to load.
+ */
+private class BoldSpan : MetricAffectingSpan() {
+    override fun updateDrawState(paint: TextPaint) = apply(paint)
 
-    override fun updateMeasureState(paint: TextPaint) = force(paint)
+    override fun updateMeasureState(paint: TextPaint) = apply(paint)
 
-    private fun force(paint: TextPaint) {
-        if (paint.typeface?.isBold != true) paint.isFakeBoldText = true
+    private fun apply(paint: TextPaint) {
+        boldTypeface(paint)?.let { paint.typeface = it }
+        paint.isFakeBoldText = true
+    }
+
+    private fun boldTypeface(paint: TextPaint): Typeface? {
+        cached?.let { return it }
+        val context = Utils.appContext
+        val loaded = runCatching {
+            ResourcesCompat.getFont(context, Constants.Fonts.whitney_bold)
+        }.getOrNull() ?: Typeface.create(paint.typeface, Typeface.BOLD)
+        cached = loaded
+        return loaded
+    }
+
+    private companion object {
+        // The bold face never changes at runtime, so load it once for every bold span
+        @Volatile
+        var cached: Typeface? = null
     }
 }

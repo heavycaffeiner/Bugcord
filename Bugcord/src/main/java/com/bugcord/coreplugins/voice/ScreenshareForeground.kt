@@ -87,6 +87,31 @@ internal object ScreenshareForeground {
             logger.info("Held back the voice service teardown, a screenshare is still running")
         })
 
+        // The stock listener stops the stream on any Disconnected state, including the transient
+        // reconnect that happens when joining someone else's stream. Only a final disconnect,
+        // willReconnect = false, may tear our own stream down.
+        runCatching {
+            val listener = Class.forName("com.discord.utilities.voice.ScreenShareManager\$RtcConnectionListener")
+            val stateChange = Class.forName("com.discord.rtcconnection.RtcConnection\$StateChange")
+            val disconnected = Class.forName("com.discord.rtcconnection.RtcConnection\$State\$d")
+            val fState = stateChange.getDeclaredField("a").apply { isAccessible = true }
+            val fWillReconnect = disconnected.getDeclaredField("a").apply { isAccessible = true }
+
+            patcher.patch(
+                listener.getDeclaredMethod("onStateChange", stateChange),
+                PreHook { param ->
+                    val state = fState.get(param.args[0]) ?: return@PreHook
+                    if (!disconnected.isInstance(state)) return@PreHook
+                    if (fWillReconnect.getBoolean(state)) {
+                        param.result = null
+                        logger.info("Ignored a reconnecting disconnect, keeping the screenshare alive")
+                    }
+                },
+            )
+        }.onFailure {
+            logger.error("Could not guard the screenshare against reconnects", it)
+        }
+
         // Remove the hold because the screenshare intent gets cleared here
         patcher.after<ScreenShareManager>("stopStream") { releaseTeardown() }
 
