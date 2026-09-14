@@ -111,7 +111,8 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
-
+        with:
+          packages: 'platform-tools'
       - name: Fetch the prebuilt toolchain
         run: |
           chmod +x tools/fetch-toolchain.sh
