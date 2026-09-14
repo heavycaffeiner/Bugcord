@@ -12,7 +12,7 @@ plugins {
 }
 
 group = "com.bugcord"
-version = "2.9.23"
+version = "2.9.24"
 
 android {
     namespace = "com.bugcord"

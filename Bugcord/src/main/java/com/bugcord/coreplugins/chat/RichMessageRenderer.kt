@@ -8,6 +8,7 @@ package com.bugcord.coreplugins.chat
 
 import android.content.Context
 import android.content.res.Resources
+import android.text.SpannableStringBuilder
 import android.view.View
 import android.widget.ImageView
 import android.widget.TextView
@@ -42,6 +43,7 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
         configureParser()
         patchAvatarGroupSpacing()
         patchEmbedRendering()
+        patchImageLinkSuppression()
     }
 
     private fun configureParser() {
@@ -103,6 +105,44 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
             val bottom = dp(itemView, 1)
             itemView.setPadding(itemView.paddingLeft, top, itemView.paddingRight, bottom)
         }
+    }
+
+    private fun patchImageLinkSuppression() {
+        runCatching {
+            val urlNodeClass = Class.forName("com.discord.utilities.textprocessing.node.UrlNode")
+            val renderContextClass = Class.forName("com.discord.utilities.textprocessing.node.UrlNode\$RenderContext")
+            val fMask = urlNodeClass.getDeclaredField("mask").apply { isAccessible = true }
+            val fUrl = urlNodeClass.getDeclaredField("url").apply { isAccessible = true }
+
+            val renderMethod = urlNodeClass.getDeclaredMethod(
+                "render",
+                SpannableStringBuilder::class.java,
+                renderContextClass,
+            )
+            Patcher.addPatch(renderMethod, object : XC_MethodHook() {
+                override fun beforeHookedMethod(param: MethodHookParam) {
+                    val mask = fMask.get(param.thisObject) as? String
+                    val url = fUrl.get(param.thisObject) as? String ?: return
+                    // For bare image links, suppress rendering the URL text so only the image is visible
+                    if (mask == null && isImageLink(url)) {
+                        param.result = null
+                    }
+                }
+            })
+        }
+    }
+
+    private fun isImageLink(url: String): Boolean {
+        val cleanUrl = url.substringBefore('?').substringBefore('#').lowercase()
+        val imageExtensions = listOf(".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".gifv")
+        if (imageExtensions.any { cleanUrl.endsWith(it) }) return true
+        if (cleanUrl.contains("cdn.discordapp.com/attachments/") || cleanUrl.contains("media.discordapp.net/attachments/")) {
+            return true
+        }
+        if (cleanUrl.contains("pbs.twimg.com/media/") || cleanUrl.contains("i.imgur.com/") || cleanUrl.contains("i.redd.it/")) {
+            return true
+        }
+        return false
     }
 
     private fun patchEmbedRendering() {
