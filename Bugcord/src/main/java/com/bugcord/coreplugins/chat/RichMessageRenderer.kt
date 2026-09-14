@@ -101,8 +101,8 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
                 position > 0 -> dp(itemView, 4)
                 else -> dp(itemView, 2)
             }
-            // Bottom padding: 1dp per user instruction to tightly match follower rows
-            val bottom = dp(itemView, 1)
+            // Bottom padding: 2dp per user instruction
+            val bottom = dp(itemView, 2)
             itemView.setPadding(itemView.paddingLeft, top, itemView.paddingRight, bottom)
         }
     }
