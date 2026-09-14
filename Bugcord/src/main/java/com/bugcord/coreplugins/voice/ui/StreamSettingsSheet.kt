@@ -65,7 +65,7 @@ internal class StreamSettingsSheet : BottomSheet() {
         val ctx = requireContext()
         val p = DimenUtils.defaultPadding
         val headerPrimary = ColorCompat.getThemedColor(ctx, R.b.colorHeaderPrimary)
-        (this as View).setPadding(p, p, p, p)
+        setPadding(p)
 
         // Built up front so picking Custom only has to flip its visibility
         val customInputs = buildCustomInputs(ctx)
