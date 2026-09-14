@@ -13,11 +13,12 @@ import com.bugcord.patcher.Patcher
 import com.bugcord.patcher.after
 import com.bugcord.utils.ReflectUtils
 import com.discord.utilities.textprocessing.DiscordParser
+import com.discord.widgets.chat.list.adapter.WidgetChatListAdapterItemEmbed
 import com.discord.widgets.chat.list.adapter.WidgetChatListAdapterItemMessage
 import com.discord.widgets.chat.list.entries.ChatListEntry
 import com.discord.widgets.chat.list.entries.MessageEntry
 import java.util.WeakHashMap
-
+import java.util.regex.Pattern
 /** Enables the legacy parser's message header/list rules for normal messages. */
 internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer")) {
     override val isHidden = true
@@ -28,9 +29,15 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
     override fun start(context: Context) {
         configureParser()
         patchAvatarGroupSpacing()
+        patchEmbedVisibility()
     }
-
     private fun configureParser() {
+        runCatching {
+            val rulesClass = Class.forName("com.discord.utilities.textprocessing.Rules")
+            val modernListPattern = Pattern.compile("^([^\\S\\r\\n]*)[*-][ \\t]+(.*)(?=\\n|$)")
+            ReflectUtils.setFinalField(rulesClass, null, "PATTERN_LIST_ITEM", modernListPattern)
+        }
+
         val parserClass = DiscordParser::class.java
         val createParser = parserClass.getDeclaredMethod(
             "createParser",
@@ -64,6 +71,19 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
             // while keeping the follower chain connected through the base bottom padding.
             val extra = if (position > 0 && !entry.isMinimal()) dp(itemView, 6) else 0
             itemView.setPadding(base.left, base.top + extra, base.right, base.bottom)
+        }
+    }
+
+    private fun patchEmbedVisibility() {
+        patcher.after<WidgetChatListAdapterItemEmbed>(
+            "onConfigure",
+            Int::class.javaPrimitiveType!!,
+            ChatListEntry::class.java,
+        ) { param ->
+            val holder = param.thisObject as WidgetChatListAdapterItemEmbed
+            if (holder.itemView.visibility == View.GONE) {
+                holder.itemView.visibility = View.VISIBLE
+            }
         }
     }
 

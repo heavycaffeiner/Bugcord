@@ -1,5 +1,0 @@
---- smali_original/com/discord/utilities/textprocessing/Rules.smali
-+++ smali/com/discord/utilities/textprocessing/Rules.smali
-@@ -384,7 +384,7 @@
--    const-string v0, "^([^\\S\\r\\n]*)[*-][ \\s]?(.*)([\\n|$])?"
-+    const-string v0, "^([^\\S\\r\\n]*)[*-][ \\t]+(.*)(?=\\n|$)"
