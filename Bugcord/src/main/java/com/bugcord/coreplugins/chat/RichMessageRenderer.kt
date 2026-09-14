@@ -96,8 +96,8 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
                 position > 0 -> dp(itemView, 4)
                 else -> dp(itemView, 2)
             }
-            // Bottom padding: 0dp so the first message gap tightly matches subsequent middle messages
-            val bottom = 0
+            // Bottom padding: 1dp per user instruction
+            val bottom = dp(itemView, 1)
             itemView.setPadding(itemView.paddingLeft, top, itemView.paddingRight, bottom)
         }
     }
