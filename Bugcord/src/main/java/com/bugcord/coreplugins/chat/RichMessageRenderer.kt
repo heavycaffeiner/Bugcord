@@ -15,9 +15,12 @@ import com.bugcord.patcher.before
 import com.bugcord.utils.ReflectUtils
 import com.bugcord.wrappers.embeds.MessageEmbedWrapper
 import com.discord.api.channel.Channel
+import com.discord.api.message.embed.MessageEmbed
+import com.discord.embed.RenderableEmbedMedia
 import com.discord.models.member.GuildMember
 import com.discord.models.message.Message
 import com.discord.stores.StoreMessageState
+import com.discord.utilities.embed.EmbedResourceUtils
 import com.discord.utilities.textprocessing.DiscordParser
 import com.discord.widgets.chat.list.adapter.WidgetChatListAdapterItemEmbed
 import com.discord.widgets.chat.list.adapter.WidgetChatListAdapterItemMessage
@@ -74,13 +77,49 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
             if (entry.isMinimal()) return@after
 
             val itemView = holder.itemView
-            val top = if (position > 0) dp(itemView, 16) else dp(itemView, 10)
-            val bottom = dp(itemView, 4)
+            val message = entry.message
+            val content = message.content.orEmpty().trimStart()
+            val hasMarkdownOrEmbed = message.hasEmbeds() ||
+                content.startsWith("#") ||
+                content.startsWith("-") ||
+                content.startsWith("*") ||
+                content.startsWith(">") ||
+                content.startsWith("```")
+
+            val top = when {
+                hasMarkdownOrEmbed -> dp(itemView, 4)
+                position > 0 -> dp(itemView, 8)
+                else -> dp(itemView, 4)
+            }
+            val bottom = dp(itemView, 1)
             itemView.setPadding(itemView.paddingLeft, top, itemView.paddingRight, bottom)
         }
     }
 
     private fun patchEmbedRendering() {
+        // Embeds with text description, title, or fields must render as rich cards, not inline media
+        runCatching {
+            patcher.before<EmbedResourceUtils>("isInlineEmbed", MessageEmbed::class.java) { param ->
+                val embed = param.args[0] as? MessageEmbed ?: return@before
+                val wrapper = MessageEmbedWrapper(embed)
+                if (!wrapper.description.isNullOrBlank() || !wrapper.title.isNullOrBlank() || !wrapper.fields.isNullOrEmpty()) {
+                    param.result = false
+                }
+            }
+        }
+
+        // Supply fallback dimensions when embed images lack width or height
+        runCatching {
+            patcher.after<EmbedResourceUtils>("getPreviewImage", MessageEmbed::class.java) { param ->
+                val media = param.result as? RenderableEmbedMedia ?: return@after
+                val w = media.b
+                val h = media.c
+                if (w == null || w <= 0 || h == null || h <= 0) {
+                    param.result = RenderableEmbedMedia(media.a, 400, 300)
+                }
+            }
+        }
+
         // Ensure embeds are always created and never dropped by user setting checks
         runCatching {
             patcher.before<ChatListEntry.Companion>(
@@ -123,6 +162,7 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
             val entry = param.args[1] as? EmbedEntry ?: return@after
             val embed = entry.embed
             holder.itemView.visibility = View.VISIBLE
+            holder.itemView.setPadding(0, 0, 0, 0)
 
             if (fBinding != null) {
                 val binding = fBinding.get(holder) ?: return@after
