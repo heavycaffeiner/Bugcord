@@ -274,6 +274,7 @@ internal class VoiceChatFix : CorePlugin(Manifest("VoiceChatFix"))  {
         patchStageStartFlow()
         patchStageJoinPromptOnStart()
         patchStreamSettingsSheet()
+        patchTextInVoiceTransition()
         ModernAudioDevices.register(patcher)
         StreamZoom.register(patcher)
         ScreenshareForeground.register(patcher)
@@ -1188,6 +1189,26 @@ internal class VoiceChatFix : CorePlugin(Manifest("VoiceChatFix"))  {
         )
     }.onFailure {
         logger.error("Failed to patch stream settings sheet", it)
+    }
+
+    // The call activity can detach the fragment before this transition callback runs.
+    // Use the current activity captured by Bugcord instead of requiring fragment attachment.
+    private fun patchTextInVoiceTransition() = runCatching {
+        val transitionActivity = WidgetCallFullscreen::class.java
+            .getDeclaredMethod("transitionActivity")
+            .apply { isAccessible = true }
+
+        patcher.patch(transitionActivity, InsteadHook {
+            Utils.appActivity.apply {
+                finish()
+                overridePendingTransition(
+                    Utils.getResId("activity_slide_horizontal_open_in", "anim"),
+                    Utils.getResId("activity_slide_horizontal_open_out", "anim"),
+                )
+            }
+        })
+    }.onFailure {
+        logger.error("Failed to patch text-in-voice activity transition", it)
     }
 
     private fun patchUserSheetView() {
