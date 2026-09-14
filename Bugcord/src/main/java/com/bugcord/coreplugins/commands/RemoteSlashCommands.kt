@@ -21,6 +21,7 @@ import com.discord.stores.StoreApplicationCommands
 import com.discord.stores.StoreGatewayConnection
 import com.discord.stores.StoreStream
 import org.json.JSONObject
+import org.json.JSONArray
 
 /**
  * Restores third party bot slash commands.
@@ -60,48 +61,49 @@ internal class RemoteSlashCommands : CorePlugin(Manifest("RemoteSlashCommands"))
         patcher.patch(requestCommands, PreHook { param ->
             val guildId = param.args[0] as? Long ?: return@PreHook
             val nonce = param.args[1] as? String ?: return@PreHook
+
             val query = param.args[3] as? String
-            val limit = param.args[5] as? Int ?: DEFAULT_LIMIT
 
             // Report success so the store keeps waiting for the payload instead of falling back
             // to the built-in command list
             param.result = true
-            fetch(guildId, nonce, query, limit)
+            fetch(guildId, nonce, query)
         })
     }
 
-    private fun fetch(guildId: Long, nonce: String, query: String?, limit: Int) {
-        val selectedId = StoreStream.getChannelsSelected().id
-        val channelId = if (selectedId > 0L) selectedId else {
-            StoreStream.getChannels().getChannelsForGuild(guildId).values
-                .firstOrNull { it.D() == 0 }?.k() ?: return
+    private fun fetch(guildId: Long, nonce: String, query: String?) {
+        val url = if (guildId > 0L) {
+            "/guilds/$guildId/application-command-index"
+        } else {
+            val channelId = StoreStream.getChannelsSelected().id
+            if (channelId > 0L) "/channels/$channelId/application-command-index" else "/users/@me/application-command-index"
         }
+
         Utils.threadPool.execute {
             runCatching {
-                val url = buildString {
-                    append("/channels/")
-                    append(channelId)
-                    append("/application-commands/search?type=1&include_applications=true")
-                    append("&limit=")
-                    append(limit.coerceIn(1, MAX_LIMIT))
-                    if (!query.isNullOrBlank()) {
-                        append("&query=")
-                        append(Uri.encode(query))
-                    }
-                }
-
                 val response = Http.Request.newDiscordRNRequest(url)
                     .setRequestTimeout(REQUEST_TIMEOUT_MS)
                     .execute()
                 response.assertOk()
 
-                // The store routes on the exact nonce generated for this request (applicationNonce,
-                // queryNonce, or discoverCommandsNonce), which is the nonce passed in args[1]
                 val json = JSONObject(response.text()).apply {
                     put("nonce", nonce)
                     put("guild_id", guildId.toString())
                 }
 
+                if (!query.isNullOrBlank()) {
+                    val rawCmds = json.optJSONArray("application_commands")
+                    if (rawCmds != null) {
+                        val filtered = JSONArray()
+                        for (i in 0 until rawCmds.length()) {
+                            val cmd = rawCmds.getJSONObject(i)
+                            if (cmd.optString("name").contains(query, ignoreCase = true)) {
+                                filtered.put(cmd)
+                            }
+                        }
+                        json.put("application_commands", filtered)
+                    }
+                }
                 val commands = GsonUtils.gsonRestApi
                     .fromJson(json.toString(), GuildApplicationCommands::class.java)
 

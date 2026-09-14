@@ -8,6 +8,8 @@ package com.bugcord.coreplugins.chat
 
 import android.content.Context
 import android.content.res.Resources
+import android.graphics.Canvas
+import android.graphics.RectF
 import android.graphics.Paint
 import android.graphics.Color
 import android.graphics.Typeface
@@ -60,6 +62,7 @@ import com.discord.utilities.textprocessing.node.BulletListNode
 import com.discord.widgets.chat.list.InlineMediaView
 import com.discord.widgets.chat.list.adapter.WidgetChatListAdapterItemEmbed
 import com.discord.widgets.chat.list.adapter.WidgetChatListItem
+import com.discord.widgets.chat.list.adapter.WidgetChatListAdapterItemAttachment
 import com.discord.widgets.chat.list.adapter.WidgetChatListAdapterItemMessage
 import com.discord.widgets.chat.list.adapter.WidgetChatListAdapterItemSticker
 import com.discord.widgets.chat.list.entries.AttachmentEntry
@@ -205,21 +208,30 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
                 override fun afterHookedMethod(param: MethodHookParam) {
                     val span = param.thisObject as? VerticalPaddingSpan ?: return
                     val text = param.args[0] as? Spanned ?: return
-                    val start = param.args[1] as? Int ?: return
                     val end = param.args[2] as? Int ?: return
                     val fm = param.args[5] as? Paint.FontMetricsInt ?: return
 
                     val spanEnd = text.getSpanEnd(span)
-                    if (spanEnd == end && start < end) {
-                        val lineText = text.subSequence(start, end).toString()
-                        if (lineText == "\n" || lineText.isBlank()) {
-                            val pad = span.paddingBottom.coerceAtLeast(1)
-                            fm.ascent = -pad
-                            fm.top = -pad
-                            fm.descent = 0
-                            fm.bottom = 0
-                        }
+                    if (spanEnd == end) {
+                        val pad = span.paddingBottom.coerceAtLeast(1)
+                        fm.bottom = fm.bottom - span.paddingBottom + pad
+                        fm.descent = fm.descent - span.paddingBottom + pad
                     }
+                }
+            })
+        }
+
+        runCatching {
+            val bbsClass = Class.forName("com.discord.utilities.spans.BlockBackgroundSpan")
+            val fRect = bbsClass.getDeclaredField("rect").apply { isAccessible = true }
+            val drawMethod = bbsClass.getDeclaredMethod("draw", Canvas::class.java)
+            Patcher.addPatch(drawMethod, object : XC_MethodHook() {
+                override fun beforeHookedMethod(param: MethodHookParam) {
+                    val span = param.thisObject as? BlockBackgroundSpan ?: return
+                    val rect = fRect.get(span) as? RectF ?: return
+                    val canvas = param.args[0] as? Canvas ?: return
+                    val density = canvas.density.let { if (it > 0) it / 160f else 2.5f }
+                    rect.bottom -= 14f * density
                 }
             })
         }
@@ -252,7 +264,7 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
                 val entry = param.args[1] as? ChatListEntry ?: return@after
                 if (entry.javaClass.simpleName == "SpacerEntry") {
                     val lp = holder.itemView.layoutParams ?: return@after
-                    val target = dp(holder.itemView, 2)
+                    val target = dp(holder.itemView, 16)
                     if (lp.height != target) {
                         lp.height = target
                         holder.itemView.layoutParams = lp
@@ -278,10 +290,21 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
             return false
         }
 
+        val textId = Utils.getResId("chat_list_adapter_item_text", "id")
+        val itemText = root.findViewById<View>(textId)
+        if (itemText != null && (itemText.visibility == View.GONE || message.content.isNullOrBlank())) {
+            (itemText.layoutParams as? ViewGroup.MarginLayoutParams)?.let { lp ->
+                if (lp.topMargin != 0 || lp.bottomMargin != 0) {
+                    lp.topMargin = 0
+                    lp.bottomMargin = 0
+                    itemText.layoutParams = lp
+                }
+            }
+        }
+
         val container = existing ?: createMediaContainer(root) ?: return false
         container.visibility = View.VISIBLE
         while (container.childCount > media.size) container.removeViewAt(container.childCount - 1)
-
         media.forEachIndexed { index, item ->
             val view = container.getChildAt(index) as? InlineMediaView ?: InlineMediaView(root.context).also {
                 it.radius = dp(root, 8).toFloat()
@@ -292,7 +315,7 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
                     LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.WRAP_CONTENT,
                         ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ).apply { topMargin = dp(root, 2) },
+                    ).apply { topMargin = 0 },
                 )
             }
             bindMedia(view, item)
@@ -317,6 +340,7 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
                 topToBottom = textId
                 horizontalBias = 0f
                 marginEnd = dp(root, 12)
+                topMargin = 0
             }
             root.addView(this)
         }
@@ -647,9 +671,8 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
                     }
                 }
                 contentView?.let {
-                    it.setPadding(it.paddingLeft, dp(it, 4), it.paddingRight, dp(it, 4))
+                    it.setPadding(it.paddingLeft, 0, it.paddingRight, dp(it, 4))
                 }
-
                 if (mediaView?.visibility != View.VISIBLE) {
                     contentView?.visibility = View.VISIBLE
                     dividerView?.visibility = View.VISIBLE
@@ -675,6 +698,46 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
                     descView.text = rawDesc
                     descView.visibility = View.VISIBLE
                     contentView?.visibility = View.VISIBLE
+                }
+            }
+        }
+        val fAttachBinding = runCatching {
+            WidgetChatListAdapterItemAttachment::class.java.getDeclaredField("binding").apply {
+                isAccessible = true
+            }
+        }.getOrNull()
+
+        patcher.after<WidgetChatListAdapterItemAttachment>(
+            "onConfigure",
+            Int::class.javaPrimitiveType!!,
+            ChatListEntry::class.java,
+        ) { param ->
+            val holder = param.thisObject as WidgetChatListAdapterItemAttachment
+            holder.itemView.setPadding(0, 0, 0, 0)
+            (holder.itemView.layoutParams as? ViewGroup.MarginLayoutParams)?.let { params ->
+                if (params.topMargin != 0 || params.bottomMargin != 0) {
+                    params.topMargin = 0
+                    params.bottomMargin = 0
+                    holder.itemView.layoutParams = params
+                }
+            }
+            if (fAttachBinding != null) {
+                val b = fAttachBinding.get(holder) ?: return@after
+                val card = getBoundField(b, "d") as? View
+                val media = getBoundField(b, "h") as? View
+                (card?.layoutParams as? ViewGroup.MarginLayoutParams)?.let { params ->
+                    if (params.topMargin != 0 || params.bottomMargin != 0) {
+                        params.topMargin = 0
+                        params.bottomMargin = 0
+                        card.layoutParams = params
+                    }
+                }
+                (media?.layoutParams as? ViewGroup.MarginLayoutParams)?.let { params ->
+                    if (params.topMargin != 0 || params.bottomMargin != 0) {
+                        params.topMargin = 0
+                        params.bottomMargin = 0
+                        media.layoutParams = params
+                    }
                 }
             }
         }
