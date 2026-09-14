@@ -44,9 +44,6 @@ internal class RemoteSlashCommands : CorePlugin(Manifest("RemoteSlashCommands"))
     private val loadingField by lazy {
         storeClass.getDeclaredField("isLoadingDiscoveryCommands").apply { isAccessible = true }
     }
-    private val discoverNonceField by lazy {
-        storeClass.getDeclaredField("discoverCommandsNonce").apply { isAccessible = true }
-    }
 
     override fun start(context: Context) {
         val requestCommands = StoreGatewayConnection::class.java.getDeclaredMethod(
@@ -74,9 +71,11 @@ internal class RemoteSlashCommands : CorePlugin(Manifest("RemoteSlashCommands"))
     }
 
     private fun fetch(guildId: Long, nonce: String, query: String?, limit: Int) {
-        val channelId = StoreStream.getChannelsSelected().id
-        if (channelId <= 0L) return
-
+        val selectedId = StoreStream.getChannelsSelected().id
+        val channelId = if (selectedId > 0L) selectedId else {
+            StoreStream.getChannels().getChannelsForGuild(guildId).values
+                .firstOrNull { it.D() == 0 }?.k() ?: return
+        }
         Utils.threadPool.execute {
             runCatching {
                 val url = buildString {
@@ -96,14 +95,10 @@ internal class RemoteSlashCommands : CorePlugin(Manifest("RemoteSlashCommands"))
                     .execute()
                 response.assertOk()
 
-                // The store routes a payload by nonce and keeps a separate one per path, so echo
-                // the nonce that is actually in flight rather than the one passed to the gateway
-                val routedNonce = runCatching {
-                    discoverNonceField.get(store) as? String
-                }.getOrNull() ?: nonce
-
+                // The store routes on the exact nonce generated for this request (applicationNonce,
+                // queryNonce, or discoverCommandsNonce), which is the nonce passed in args[1]
                 val json = JSONObject(response.text()).apply {
-                    put("nonce", routedNonce)
+                    put("nonce", nonce)
                     put("guild_id", guildId.toString())
                 }
 

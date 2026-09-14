@@ -6,12 +6,15 @@
 
 package com.bugcord.coreplugins.forwardedmessages
 
+import android.app.AlertDialog
 import android.content.Context
+import android.os.Bundle
 import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.core.content.ContextCompat
+import androidx.fragment.app.FragmentManager
 import com.bugcord.Http
 import com.bugcord.Utils
 import com.bugcord.entities.CorePlugin
@@ -22,8 +25,8 @@ import com.discord.models.message.Message
 import com.discord.utilities.color.ColorCompat
 import com.discord.widgets.channels.WidgetChannelSelector
 import com.discord.widgets.chat.list.actions.WidgetChatListActions
+import com.discord.widgets.guilds.WidgetGuildSelector
 import com.lytefast.flexinput.R
-
 /**
  * Adds the "Forward" message action. The legacy client can render forwards but never had a way to
  * create one, so the action is sent straight to the API with a FORWARD message reference.
@@ -44,27 +47,50 @@ internal class ForwardAction : CorePlugin(Manifest("ForwardAction")) {
             val layout = root.findViewById<LinearLayout>("dialog_chat_actions_container") ?: return@after
             if (layout.findViewById<View>(forwardViewId) != null) return@after
 
-            // registerForResult binds the listener to this sheet's own lifecycle, and the picker
-            // only reports back after this sheet is gone, so that listener is already destroyed.
-            // Listen on the parent manager instead, which outlives both sheets.
             val manager = this.parentFragmentManager
             val owner = this.requireActivity()
-            manager.setFragmentResultListener(RESULT_KEY, owner) { _, bundle ->
+
+            manager.setFragmentResultListener(RESULT_KEY_CHANNEL, owner) { _, bundle ->
                 val channelId = bundle.getLong(RESULT_CHANNEL_ID)
                 if (channelId > 0L) forward(message, channelId)
-                manager.clearFragmentResultListener(RESULT_KEY)
+                manager.clearFragmentResultListener(RESULT_KEY_CHANNEL)
+            }
+
+            manager.setFragmentResultListener(RESULT_KEY_GUILD, owner) { _, bundle ->
+                val pickedGuildId = bundle.getLong(RESULT_GUILD_ID)
+                manager.clearFragmentResultListener(RESULT_KEY_GUILD)
+                if (pickedGuildId > 0L) {
+                    launchChannelPicker(manager, pickedGuildId, isDm = false)
+                }
             }
 
             val entry = makeEntry(layout.context) {
-                // A DM message has no guild; 0 tells the picker to offer private channels
-                WidgetChannelSelector.Companion!!.launchForText(
-                    this,
-                    message.guildId ?: 0L,
-                    RESULT_KEY,
-                    false,
-                    0,
-                )
                 dismiss()
+                val guildId = message.guildId
+                if (guildId != null && guildId > 0L) {
+                    val options = arrayOf("Direct Messages", "Current Server", "Other Server...")
+                    AlertDialog.Builder(layout.context)
+                        .setTitle("Forward to")
+                        .setItems(options) { _, which ->
+                            when (which) {
+                                0 -> launchChannelPicker(manager, 0L, isDm = true)
+                                1 -> launchChannelPicker(manager, guildId, isDm = false)
+                                2 -> launchGuildPicker(manager)
+                            }
+                        }
+                        .show()
+                } else {
+                    val options = arrayOf("Direct Messages", "Choose Server...")
+                    AlertDialog.Builder(layout.context)
+                        .setTitle("Forward to")
+                        .setItems(options) { _, which ->
+                            when (which) {
+                                0 -> launchChannelPicker(manager, 0L, isDm = true)
+                                1 -> launchGuildPicker(manager)
+                            }
+                        }
+                        .show()
+                }
             }
 
             // Sit next to Reply, which is where 344013 puts Forward
@@ -130,10 +156,38 @@ internal class ForwardAction : CorePlugin(Manifest("ForwardAction")) {
         }
     }
 
-    private companion object {
-        const val RESULT_KEY = "BUGCORD_FORWARD_TARGET"
+    private fun launchChannelPicker(manager: FragmentManager, guildId: Long, isDm: Boolean) {
+        val selector = WidgetChannelSelector()
+        val filter = if (isDm) {
+            WidgetChannelSelector.BaseFilterFunction()
+        } else {
+            WidgetChannelSelector.TypeFilterFunction(0)
+        }
+        selector.arguments = Bundle().apply {
+            putString("INTENT_EXTRA_REQUEST_CODE", RESULT_KEY_CHANNEL)
+            putLong("INTENT_EXTRA_GUILD_ID", guildId)
+            putBoolean("INTENT_EXTRA_INCLUDE_NO_CHANNEL", false)
+            putInt("INTENT_EXTRA_NO_CHANNEL_STRING_ID", 0)
+            putSerializable("INTENT_EXTRA_FILTER_FUNCTION", filter)
+        }
+        selector.show(manager, WidgetChannelSelector::class.java.name)
+    }
 
-        /** Key WidgetChannelSelector puts the picked channel under. */
+    private fun launchGuildPicker(manager: FragmentManager) {
+        val selector = WidgetGuildSelector()
+        selector.arguments = Bundle().apply {
+            putString("INTENT_EXTRA_REQUEST_CODE", RESULT_KEY_GUILD)
+            putBoolean("INTENT_EXTRA_INCLUDE_NO_GUILD", false)
+            putInt("INTENT_EXTRA_NO_GUILD_STRING_ID", 0)
+            putSerializable("INTENT_EXTRA_FILTER_FUNCTION", null)
+        }
+        selector.show(manager, WidgetGuildSelector::class.java.name)
+    }
+
+    private companion object {
+        const val RESULT_KEY_CHANNEL = "BUGCORD_FORWARD_CHANNEL"
+        const val RESULT_KEY_GUILD = "BUGCORD_FORWARD_GUILD"
         const val RESULT_CHANNEL_ID = "INTENT_EXTRA_CHANNEL_ID"
+        const val RESULT_GUILD_ID = "INTENT_EXTRA_GUILD_ID"
     }
 }

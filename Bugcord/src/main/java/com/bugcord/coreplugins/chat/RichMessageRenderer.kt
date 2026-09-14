@@ -8,6 +8,7 @@ package com.bugcord.coreplugins.chat
 
 import android.content.Context
 import android.content.res.Resources
+import android.graphics.Paint
 import android.graphics.Color
 import android.graphics.Typeface
 import android.text.SpannableStringBuilder
@@ -58,6 +59,7 @@ import com.discord.utilities.textprocessing.node.BasicRenderContext
 import com.discord.utilities.textprocessing.node.BulletListNode
 import com.discord.widgets.chat.list.InlineMediaView
 import com.discord.widgets.chat.list.adapter.WidgetChatListAdapterItemEmbed
+import com.discord.widgets.chat.list.adapter.WidgetChatListItem
 import com.discord.widgets.chat.list.adapter.WidgetChatListAdapterItemMessage
 import com.discord.widgets.chat.list.adapter.WidgetChatListAdapterItemSticker
 import com.discord.widgets.chat.list.entries.AttachmentEntry
@@ -90,6 +92,7 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
         runCatching { patchEmbedRendering() }
             .onFailure { logger.error("Failed to patch embed rendering", it) }
         runCatching { patchImageLinkSuppression() }
+        runCatching { patchCodeBlockBottomPadding() }
     }
 
     /**
@@ -180,11 +183,47 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
         ReflectUtils.setFinalField(parserClass, null, "MASKED_LINK_PARSER", maskedLinkParser)
     }
 
-    // A code block's trailing newline sits inside its background span, which paints one extra
-    // empty line. Both fixes tried so far regressed worse than the padding they removed: pulling
-    // the span off the newline dropped the background on short blocks, and deleting the newline
-    // glues the next node onto the last line of code, because siblings append after this returns.
-    // Left at stock until it can be verified on a device.
+    /**
+     * Code blocks end with a trailing newline that creates an empty line in Android's text layout.
+     * VerticalPaddingSpan adds font height plus 5dp padding to that line, creating an excessive gap
+     * at the bottom of the code block. Compact the trailing newline's font metrics so the empty line
+     * only takes minimal vertical space.
+     */
+    private fun patchCodeBlockBottomPadding() {
+        runCatching {
+            val vpsClass = Class.forName("com.discord.utilities.spans.VerticalPaddingSpan")
+            val chooseHeight = vpsClass.getDeclaredMethod(
+                "chooseHeight",
+                CharSequence::class.java,
+                Int::class.javaPrimitiveType!!,
+                Int::class.javaPrimitiveType!!,
+                Int::class.javaPrimitiveType!!,
+                Int::class.javaPrimitiveType!!,
+                Paint.FontMetricsInt::class.java,
+            )
+            Patcher.addPatch(chooseHeight, object : XC_MethodHook() {
+                override fun afterHookedMethod(param: MethodHookParam) {
+                    val span = param.thisObject as? VerticalPaddingSpan ?: return
+                    val text = param.args[0] as? Spanned ?: return
+                    val start = param.args[1] as? Int ?: return
+                    val end = param.args[2] as? Int ?: return
+                    val fm = param.args[5] as? Paint.FontMetricsInt ?: return
+
+                    val spanEnd = text.getSpanEnd(span)
+                    if (spanEnd == end && start < end) {
+                        val lineText = text.subSequence(start, end).toString()
+                        if (lineText == "\n" || lineText.isBlank()) {
+                            val pad = span.paddingBottom.coerceAtLeast(1)
+                            fm.ascent = -pad
+                            fm.top = -pad
+                            fm.descent = 0
+                            fm.bottom = 0
+                        }
+                    }
+                }
+            })
+        }
+    }
 
     private fun patchMessageLayout() {
         patcher.after<WidgetChatListAdapterItemMessage>(
@@ -193,14 +232,35 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
             ChatListEntry::class.java,
         ) { param ->
             val holder = param.thisObject as WidgetChatListAdapterItemMessage
+            val position = param.args[0] as? Int ?: return@after
             val entry = param.args[1] as? MessageEntry ?: return@after
             val itemView = holder.itemView as? ConstraintLayout ?: return@after
 
             val hasInlineMedia = renderInlineMedia(itemView, entry.message)
-            applySpacing(itemView, entry, hasInlineMedia)
+            applySpacing(itemView, entry, hasInlineMedia, position)
+        }
+
+        // The 24dp typing indicator spacer sits at position 0 in the reverse layout even when nobody
+        // is typing, creating a large empty gap above the chat input box. Shrink it down.
+        runCatching {
+            patcher.after<WidgetChatListItem>(
+                "onConfigure",
+                Int::class.javaPrimitiveType!!,
+                ChatListEntry::class.java,
+            ) { param ->
+                val holder = param.thisObject as WidgetChatListItem
+                val entry = param.args[1] as? ChatListEntry ?: return@after
+                if (entry.javaClass.simpleName == "SpacerEntry") {
+                    val lp = holder.itemView.layoutParams ?: return@after
+                    val target = dp(holder.itemView, 2)
+                    if (lp.height != target) {
+                        lp.height = target
+                        holder.itemView.layoutParams = lp
+                    }
+                }
+            }
         }
     }
-
     /**
      * Draws image and video media inside the message row itself so a media message renders as one
      * message instead of an empty header row followed by a separate media row.
@@ -349,15 +409,17 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
         return message.embeds?.any { !isMergeableEmbed(it) } == true
     }
 
-    private fun applySpacing(itemView: View, entry: MessageEntry, hasInlineMedia: Boolean) {
+    private fun applySpacing(itemView: View, entry: MessageEntry, hasInlineMedia: Boolean, position: Int) {
         // Apply message spacing only to the first message; leave middle messages untouched
         if (entry.isMinimal()) return
 
         val message = entry.message
         // Every first message gets the same 2dp lead, media or not
         val top = dp(itemView, 2)
-        // Rows that continue this message must touch it, otherwise they read as a separate message
-        val bottom = if (hasTrailingRows(message) || hasInlineMedia) 0 else dp(itemView, 2)
+        // The last message right above the chat input bar (position <= 1 in reverse layout) or
+        // messages continuing with trailing rows get 0 bottom padding to avoid an excessive gap
+        val isLastMessage = position <= 1
+        val bottom = if (isLastMessage || hasTrailingRows(message) || hasInlineMedia) 0 else dp(itemView, 2)
         itemView.setPadding(itemView.paddingLeft, top, itemView.paddingRight, bottom)
     }
 
@@ -554,8 +616,14 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
             val entry = param.args[1] as? EmbedEntry ?: return@after
             val embed = entry.embed
             holder.itemView.visibility = View.VISIBLE
-            // Match the media message spacing so a standalone embed row is not glued to the header
-            holder.itemView.setPadding(0, dp(holder.itemView, 2), 0, 0)
+            holder.itemView.setPadding(0, 0, 0, 0)
+            (holder.itemView.layoutParams as? ViewGroup.MarginLayoutParams)?.let { params ->
+                if (params.topMargin != 0 || params.bottomMargin != 0) {
+                    params.topMargin = 0
+                    params.bottomMargin = 0
+                    holder.itemView.layoutParams = params
+                }
+            }
 
             if (fBinding != null) {
                 val binding = fBinding.get(holder) ?: return@after
@@ -571,13 +639,15 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
                 cardView?.visibility = View.VISIBLE
                 imageView?.adjustViewBounds = true
 
-                // The card ships a 5dp bottom margin that stacks on the row spacing, which reads as
-                // a gap between the message and its embed
                 (cardView?.layoutParams as? ViewGroup.MarginLayoutParams)?.let { params ->
-                    if (params.bottomMargin != 0) {
+                    if (params.topMargin != 0 || params.bottomMargin != 0) {
+                        params.topMargin = 0
                         params.bottomMargin = 0
                         cardView.layoutParams = params
                     }
+                }
+                contentView?.let {
+                    it.setPadding(it.paddingLeft, dp(it, 4), it.paddingRight, dp(it, 4))
                 }
 
                 if (mediaView?.visibility != View.VISIBLE) {
