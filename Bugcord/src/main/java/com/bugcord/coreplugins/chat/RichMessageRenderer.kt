@@ -8,30 +8,59 @@ package com.bugcord.coreplugins.chat
 
 import android.content.Context
 import android.content.res.Resources
+import android.graphics.Color
+import android.graphics.Typeface
 import android.text.SpannableStringBuilder
+import android.text.TextPaint
+import android.text.style.MetricAffectingSpan
+import android.text.style.StyleSpan
 import android.view.View
+import android.view.ViewGroup
 import android.widget.ImageView
+import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.constraintlayout.widget.ConstraintLayout
+import com.bugcord.Utils
 import com.bugcord.entities.CorePlugin
 import com.bugcord.patcher.Patcher
 import com.bugcord.patcher.after
 import com.bugcord.patcher.before
+import com.bugcord.patcher.instead
 import com.bugcord.utils.ReflectUtils
 import com.bugcord.wrappers.embeds.MessageEmbedWrapper
+import com.bugcord.wrappers.messages.AttachmentWrapper.Companion.height
+import com.bugcord.wrappers.messages.AttachmentWrapper.Companion.proxyUrl
+import com.bugcord.wrappers.messages.AttachmentWrapper.Companion.type
+import com.bugcord.wrappers.messages.AttachmentWrapper.Companion.url
+import com.bugcord.wrappers.messages.AttachmentWrapper.Companion.width
 import com.discord.api.channel.Channel
+import com.discord.api.message.attachment.MessageAttachment
+import com.discord.api.message.attachment.MessageAttachmentType
 import com.discord.api.message.embed.MessageEmbed
 import com.discord.embed.RenderableEmbedMedia
 import com.discord.models.member.GuildMember
 import com.discord.models.message.Message
+import com.discord.simpleast.core.node.Node
+import com.discord.simpleast.core.parser.ParseSpec
+import com.discord.simpleast.core.parser.Parser
+import com.discord.simpleast.core.parser.Rule
 import com.discord.stores.StoreMessageState
+import com.discord.stores.StoreStream
 import com.discord.utilities.embed.EmbedResourceUtils
 import com.discord.utilities.textprocessing.DiscordParser
+import com.discord.utilities.textprocessing.Rules
+import com.discord.utilities.textprocessing.node.BasicRenderContext
+import com.discord.utilities.textprocessing.node.BulletListNode
+import com.discord.widgets.chat.list.InlineMediaView
 import com.discord.widgets.chat.list.adapter.WidgetChatListAdapterItemEmbed
 import com.discord.widgets.chat.list.adapter.WidgetChatListAdapterItemMessage
+import com.discord.widgets.chat.list.entries.AttachmentEntry
 import com.discord.widgets.chat.list.entries.ChatListEntry
 import com.discord.widgets.chat.list.entries.EmbedEntry
 import com.discord.widgets.chat.list.entries.MessageEntry
+import com.discord.widgets.media.WidgetMedia
 import de.robv.android.xposed.XC_MethodHook
+import java.util.regex.Matcher
 import java.util.regex.Pattern
 
 /** Enables the legacy parser's message header/list rules for normal messages. */
@@ -39,20 +68,44 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
     override val isHidden = true
     override val isRequired = true
 
+    private val mediaContainerId = View.generateViewId()
+
     override fun start(context: Context) {
+        // Must run before any parser is built so every cached parser picks up the fixed rules
+        patchListItemRule()
+        patchBoldRendering()
         configureParser()
-        patchAvatarGroupSpacing()
+        patchMessageLayout()
         patchEmbedRendering()
         patchImageLinkSuppression()
     }
 
-    private fun configureParser() {
+    /**
+     * Replaces the stock list rule, whose pattern treats a bare `-` as a bullet and swallows it.
+     * `1234-5678` lost its hyphen because `-5678` parsed as a list item.
+     */
+    private fun patchListItemRule() {
         runCatching {
-            val rulesClass = Class.forName("com.discord.utilities.textprocessing.Rules")
-            val modernListPattern = Pattern.compile("^([^\\S\\r\\n]*)[*-][ \\t]+(.*?)(\\n|$)")
-            ReflectUtils.setFinalField(rulesClass, null, "PATTERN_LIST_ITEM", modernListPattern)
+            patcher.instead<Rules>("createListItemRule") { ListItemRule<BasicRenderContext, Any>() }
         }
+    }
 
+    /**
+     * `**bold**` produces a StyleSpan only. The chat font resolves to a non-bold typeface, so the
+     * span changes nothing visible; force stroke-level bolding as a fallback.
+     */
+    private fun patchBoldRendering() {
+        runCatching {
+            val boldStyles = Class.forName("b.a.t.b.b.a").getDeclaredMethod("invoke")
+            Patcher.addPatch(boldStyles, object : XC_MethodHook() {
+                override fun afterHookedMethod(param: MethodHookParam) {
+                    param.result = listOf(StyleSpan(Typeface.BOLD), ForcedBoldSpan())
+                }
+            })
+        }
+    }
+
+    private fun configureParser() {
         val parserClass = DiscordParser::class.java
         val createParser = parserClass.getDeclaredMethod(
             "createParser",
@@ -70,7 +123,7 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
         ReflectUtils.setFinalField(parserClass, null, "MASKED_LINK_PARSER", maskedLinkParser)
     }
 
-    private fun patchAvatarGroupSpacing() {
+    private fun patchMessageLayout() {
         patcher.after<WidgetChatListAdapterItemMessage>(
             "onConfigure",
             Int::class.javaPrimitiveType!!,
@@ -79,32 +132,180 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
             val holder = param.thisObject as WidgetChatListAdapterItemMessage
             val position = param.args[0] as? Int ?: return@after
             val entry = param.args[1] as? MessageEntry ?: return@after
+            val itemView = holder.itemView as? ConstraintLayout ?: return@after
 
-            // Apply message spacing only to the first message; leave middle messages untouched
-            if (entry.isMinimal()) return@after
-
-            val itemView = holder.itemView
-            val message = entry.message
-            val content = message.content.orEmpty().trimStart()
-            val hasMarkdownOrEmbed = message.hasEmbeds() ||
-                content.startsWith("#") ||
-                content.startsWith("-") ||
-                content.startsWith("*") ||
-                content.startsWith(">") ||
-                content.startsWith("```")
-
-            // Top padding:
-            // 2dp for messages with embeds or markdown headers/lists (avoids excessive top spacing)
-            // 4dp for normal new author groups (prevents end message of previous group from having a large bottom gap)
-            val top = when {
-                hasMarkdownOrEmbed -> dp(itemView, 2)
-                position > 0 -> dp(itemView, 4)
-                else -> dp(itemView, 2)
-            }
-            // Bottom padding: 2dp per user instruction
-            val bottom = dp(itemView, 2)
-            itemView.setPadding(itemView.paddingLeft, top, itemView.paddingRight, bottom)
+            val hasInlineMedia = renderInlineMedia(itemView, entry.message)
+            applySpacing(itemView, entry, position, hasInlineMedia)
         }
+    }
+
+    /**
+     * Draws image and video media inside the message row itself so a media message renders as one
+     * message instead of an empty header row followed by a separate media row.
+     * Returns true when at least one media view is attached.
+     */
+    private fun renderInlineMedia(root: ConstraintLayout, message: Message): Boolean {
+        val media = mergeableMedia(message)
+        val existing = root.findViewById<LinearLayout>(mediaContainerId)
+
+        if (media.isEmpty()) {
+            existing?.apply {
+                removeAllViews()
+                visibility = View.GONE
+            }
+            return false
+        }
+
+        val container = existing ?: createMediaContainer(root) ?: return false
+        container.visibility = View.VISIBLE
+        while (container.childCount > media.size) container.removeViewAt(container.childCount - 1)
+
+        media.forEachIndexed { index, item ->
+            val view = container.getChildAt(index) as? InlineMediaView ?: InlineMediaView(root.context).also {
+                it.radius = dp(root, 8).toFloat()
+                it.cardElevation = 0f
+                it.setCardBackgroundColor(Color.TRANSPARENT)
+                container.addView(
+                    it,
+                    LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ).apply { topMargin = dp(root, 4) },
+                )
+            }
+            bindMedia(view, item)
+        }
+        return true
+    }
+
+    private fun createMediaContainer(root: ConstraintLayout): LinearLayout? {
+        val guidelineId = Utils.getResId("uikit_chat_guideline", "id")
+        val textId = Utils.getResId("chat_list_adapter_item_text", "id")
+        if (guidelineId == 0 || textId == 0) return null
+
+        return LinearLayout(root.context).apply {
+            id = mediaContainerId
+            orientation = LinearLayout.VERTICAL
+            layoutParams = ConstraintLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply {
+                startToEnd = guidelineId
+                endToEnd = ConstraintLayout.LayoutParams.PARENT_ID
+                topToBottom = textId
+                horizontalBias = 0f
+                marginEnd = dp(root, 12)
+            }
+            root.addView(this)
+        }
+    }
+
+    private fun bindMedia(view: InlineMediaView, item: Any) {
+        val autoPlayGifs = runCatching {
+            StoreStream.getUserSettings().getIsAutoPlayGifsEnabled()
+        }.getOrDefault(false)
+
+        when (item) {
+            is MessageAttachment -> {
+                val (width, height) = scaledSize(view, item.width ?: 0, item.height ?: 0)
+                view.updateUIWithAttachment(item, width, height, autoPlayGifs)
+                view.setOnClickListener { WidgetMedia.Companion!!.launch(it.context, item) }
+            }
+            is MessageEmbed -> {
+                val preview = EmbedResourceUtils.INSTANCE.getPreviewImage(item)
+                val (width, height) = scaledSize(view, preview?.b ?: 0, preview?.c ?: 0)
+                view.updateUIWithEmbed(item, width, height, autoPlayGifs)
+                view.setOnClickListener { WidgetMedia.Companion!!.launch(it.context, item) }
+            }
+        }
+    }
+
+    private fun scaledSize(view: View, width: Int, height: Int): Pair<Int, Int> {
+        if (width <= 0 || height <= 0) {
+            return ViewGroup.LayoutParams.WRAP_CONTENT to ViewGroup.LayoutParams.WRAP_CONTENT
+        }
+        val utils = EmbedResourceUtils.INSTANCE
+        val scaled = utils.calculateScaledSize(
+            width,
+            height,
+            utils.computeMaximumImageWidthPx(view.context),
+            utils.getMAX_IMAGE_VIEW_HEIGHT_PX(),
+            view.resources,
+            0,
+        )
+        return scaled.first to scaled.second
+    }
+
+    /** Attachments and embeds that the message row draws itself, in render order. */
+    private fun mergeableMedia(message: Message): List<Any> {
+        val attachments = message.attachments?.filter { isMergeableAttachment(it) }.orEmpty()
+        if (attachments.isEmpty() && message.embeds.isNullOrEmpty()) return attachments
+
+        val shownUrls = HashSet<String>()
+        attachments.forEach {
+            shownUrls.add(it.url)
+            shownUrls.add(it.proxyUrl)
+        }
+
+        val media = ArrayList<Any>(attachments)
+        message.embeds?.forEach { embed ->
+            if (!isMergeableEmbed(embed)) return@forEach
+            val previewUrl = EmbedResourceUtils.INSTANCE.getPreviewImage(embed)?.a
+            if (previewUrl != null && !shownUrls.add(previewUrl)) return@forEach
+            media.add(embed)
+        }
+        return media
+    }
+
+    private fun isMergeableAttachment(attachment: MessageAttachment): Boolean = runCatching {
+        if (!StoreStream.getUserSettings().getIsAttachmentMediaInline()) return@runCatching false
+        // Spoilers keep their own row so the reveal overlay stays intact
+        if (attachment.h()) return@runCatching false
+        val type = attachment.type
+        if (type != MessageAttachmentType.IMAGE && type != MessageAttachmentType.VIDEO) return@runCatching false
+        (attachment.width ?: 0) > 0 && (attachment.height ?: 0) > 0
+    }.getOrDefault(false)
+
+    private fun isMergeableEmbed(embed: MessageEmbed): Boolean = runCatching {
+        val settings = StoreStream.getUserSettings()
+        if (!settings.getIsEmbedMediaInlined() || !settings.getIsRenderEmbedsEnabled()) return@runCatching false
+        // Rich embeds carry text and keep rendering as a card
+        if (!EmbedResourceUtils.INSTANCE.isInlineEmbed(embed)) return@runCatching false
+        val preview = EmbedResourceUtils.INSTANCE.getPreviewImage(embed) ?: return@runCatching false
+        (preview.b ?: 0) > 0 && (preview.c ?: 0) > 0
+    }.getOrDefault(false)
+
+    /** True when the message still produces embed or attachment rows of its own. */
+    private fun hasTrailingRows(message: Message): Boolean {
+        if (message.attachments?.any { !isMergeableAttachment(it) } == true) return true
+        return message.embeds?.any { !isMergeableEmbed(it) } == true
+    }
+
+    private fun applySpacing(itemView: View, entry: MessageEntry, position: Int, hasInlineMedia: Boolean) {
+        // Apply message spacing only to the first message; leave middle messages untouched
+        if (entry.isMinimal()) return
+
+        val message = entry.message
+        val content = message.content.orEmpty().trimStart()
+        val hasMarkdownOrEmbed = hasInlineMedia ||
+            message.hasEmbeds() ||
+            content.startsWith("#") ||
+            content.startsWith("-") ||
+            content.startsWith("*") ||
+            content.startsWith(">") ||
+            content.startsWith("```")
+
+        // Top padding:
+        // 2dp for messages with media or markdown headers/lists (avoids excessive top spacing)
+        // 4dp for normal new author groups (prevents end message of previous group from having a large bottom gap)
+        val top = when {
+            hasMarkdownOrEmbed -> dp(itemView, 2)
+            position > 0 -> dp(itemView, 4)
+            else -> dp(itemView, 2)
+        }
+        // Rows that continue this message must touch it, otherwise they read as a separate message
+        val bottom = if (hasTrailingRows(message)) 0 else dp(itemView, 2)
+        itemView.setPadding(itemView.paddingLeft, top, itemView.paddingRight, bottom)
     }
 
     private fun patchImageLinkSuppression() {
@@ -208,6 +409,31 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
             }
         }
 
+        // Drop the rows for media the message row now draws itself
+        runCatching {
+            patcher.after<ChatListEntry.Companion>(
+                "createEmbedEntries",
+                Message::class.java,
+                StoreMessageState.State::class.java,
+                Boolean::class.javaPrimitiveType!!,
+                Boolean::class.javaPrimitiveType!!,
+                Boolean::class.javaPrimitiveType!!,
+                Boolean::class.javaPrimitiveType!!,
+                Boolean::class.javaPrimitiveType!!,
+                Channel::class.java,
+                GuildMember::class.java,
+                Map::class.java,
+                Map::class.java,
+            ) { param ->
+                val entries = param.result as? List<*> ?: return@after
+                val kept = entries.filterNot {
+                    it is AttachmentEntry && isMergeableAttachment(it.attachment) ||
+                        it is EmbedEntry && isMergeableEmbed(it.embed)
+                }
+                if (kept.size != entries.size) param.result = kept
+            }
+        }
+
         // Always allow media rendering in embeds
         runCatching {
             patcher.before<WidgetChatListAdapterItemEmbed>("shouldRenderMedia") { param ->
@@ -307,5 +533,29 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
 
     override fun stop(context: Context) {
         patcher.unpatchAll()
+    }
+}
+
+/**
+ * List rule that requires whitespace after the bullet, so `1234-5678` keeps its hyphen.
+ * The trailing newline is left for the text rule, which keeps consecutive items parsing as lists.
+ */
+private class ListItemRule<T : BasicRenderContext, S : Any> :
+    Rule.BlockRule<T, Node<T>, S>(Pattern.compile("^([^\\S\\r\\n]*)[*-][ \\t]+(.*?)[ \\t]*(?=\\n|$)")) {
+
+    override fun parse(matcher: Matcher, parser: Parser<T, in Node<T>, S>, state: S): ParseSpec<T, S> {
+        val nestedLevel = if (matcher.group(1).isNullOrEmpty()) 1 else 2
+        return ParseSpec(BulletListNode<T>(nestedLevel, false), state, matcher.start(2), matcher.end(2))
+    }
+}
+
+/** Bolds text at stroke level when the resolved typeface has no bold variant. */
+private class ForcedBoldSpan : MetricAffectingSpan() {
+    override fun updateDrawState(paint: TextPaint) = force(paint)
+
+    override fun updateMeasureState(paint: TextPaint) = force(paint)
+
+    private fun force(paint: TextPaint) {
+        if (paint.typeface?.isBold != true) paint.isFakeBoldText = true
     }
 }
