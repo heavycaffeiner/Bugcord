@@ -10,6 +10,7 @@ import android.content.Context
 import android.view.View
 import android.widget.TextView
 import com.bugcord.entities.CorePlugin
+import com.bugcord.patcher.Patcher
 import com.bugcord.patcher.after
 import com.bugcord.patcher.before
 import com.bugcord.utils.ReflectUtils
@@ -27,6 +28,7 @@ import com.discord.widgets.chat.list.adapter.WidgetChatListAdapterItemMessage
 import com.discord.widgets.chat.list.entries.ChatListEntry
 import com.discord.widgets.chat.list.entries.EmbedEntry
 import com.discord.widgets.chat.list.entries.MessageEntry
+import de.robv.android.xposed.XC_MethodHook
 import java.util.regex.Pattern
 
 /** Enables the legacy parser's message header/list rules for normal messages. */
@@ -86,23 +88,31 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
                 content.startsWith(">") ||
                 content.startsWith("```")
 
+            // Top padding:
+            // 2dp for messages with embeds or markdown headers/lists (avoids excessive top spacing)
+            // 4dp for normal new author groups (prevents end message of previous group from having a large bottom gap)
             val top = when {
-                hasMarkdownOrEmbed -> dp(itemView, 4)
-                position > 0 -> dp(itemView, 8)
-                else -> dp(itemView, 4)
+                hasMarkdownOrEmbed -> dp(itemView, 2)
+                position > 0 -> dp(itemView, 4)
+                else -> dp(itemView, 2)
             }
-            val bottom = dp(itemView, 1)
+            // Bottom padding: 0dp so the first message gap tightly matches subsequent middle messages
+            val bottom = 0
             itemView.setPadding(itemView.paddingLeft, top, itemView.paddingRight, bottom)
         }
     }
 
     private fun patchEmbedRendering() {
-        // Embeds with text description, title, or fields must render as rich cards, not inline media
+        // Embeds with text description, title, author, or fields must render as rich cards, not inline media
         runCatching {
             patcher.before<EmbedResourceUtils>("isInlineEmbed", MessageEmbed::class.java) { param ->
                 val embed = param.args[0] as? MessageEmbed ?: return@before
                 val wrapper = MessageEmbedWrapper(embed)
-                if (!wrapper.description.isNullOrBlank() || !wrapper.title.isNullOrBlank() || !wrapper.fields.isNullOrEmpty()) {
+                if (!wrapper.description.isNullOrBlank() ||
+                    !wrapper.title.isNullOrBlank() ||
+                    wrapper.author != null ||
+                    !wrapper.fields.isNullOrEmpty()
+                ) {
                     param.result = false
                 }
             }
@@ -147,6 +157,25 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
             }
         }
 
+        // Hook configureUI directly to ensure item view stays visible and unpadded
+        runCatching {
+            val modelClass = Class.forName("com.discord.widgets.chat.list.adapter.WidgetChatListAdapterItemEmbed\$Model")
+            val configureUIMethod = WidgetChatListAdapterItemEmbed::class.java.getDeclaredMethod("configureUI", modelClass)
+            configureUIMethod.isAccessible = true
+            Patcher.addPatch(configureUIMethod, object : XC_MethodHook() {
+                override fun beforeHookedMethod(param: MethodHookParam) {
+                    val holder = param.thisObject as? WidgetChatListAdapterItemEmbed ?: return
+                    holder.itemView.visibility = View.VISIBLE
+                    holder.itemView.setPadding(0, 0, 0, 0)
+                }
+                override fun afterHookedMethod(param: MethodHookParam) {
+                    val holder = param.thisObject as? WidgetChatListAdapterItemEmbed ?: return
+                    holder.itemView.visibility = View.VISIBLE
+                    holder.itemView.setPadding(0, 0, 0, 0)
+                }
+            })
+        }
+
         val fBinding = runCatching {
             WidgetChatListAdapterItemEmbed::class.java.getDeclaredField("binding").apply {
                 isAccessible = true
@@ -172,6 +201,7 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
                 val mediaView = getBoundField(binding, "t") as? View
                 val descView = getBoundField(binding, "h") as? TextView
                 val titleView = getBoundField(binding, "r") as? TextView
+                val authorView = getBoundField(binding, "e") as? TextView
 
                 cardView?.visibility = View.VISIBLE
 
@@ -181,6 +211,13 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
                 }
 
                 val wrapper = MessageEmbedWrapper(embed)
+                val rawAuthor = wrapper.author?.name
+                if (!rawAuthor.isNullOrBlank() && authorView != null && authorView.text.isNullOrBlank()) {
+                    authorView.text = rawAuthor
+                    authorView.visibility = View.VISIBLE
+                    contentView?.visibility = View.VISIBLE
+                }
+
                 val rawTitle = wrapper.title
                 if (!rawTitle.isNullOrBlank() && titleView != null && titleView.text.isNullOrBlank()) {
                     titleView.text = rawTitle
