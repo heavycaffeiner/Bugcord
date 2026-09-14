@@ -11,7 +11,7 @@ import android.content.res.AssetManager
 import android.content.res.Resources
 import com.bugcord.Utils.appContext
 import com.bugcord.coreplugins.*
-import com.bugcord.coreplugins.chat.Markdown
+import com.bugcord.coreplugins.chat.RichMessageRenderer
 import com.bugcord.coreplugins.accountstanding.AccountStanding
 import com.bugcord.coreplugins.badges.DiscordBadges
 import com.bugcord.coreplugins.badges.SupporterBadges
@@ -300,7 +300,7 @@ object PluginManager {
     @JvmStatic
     fun loadCorePlugins(context: Context) {
         val corePlugins = arrayOf(
-            Markdown(),
+            RichMessageRenderer(),
             CoreFixes(),
             CoreFeatures(),
             AccountStanding(),
