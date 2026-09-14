@@ -7,7 +7,9 @@
 package com.bugcord.coreplugins.chat
 
 import android.content.Context
+import android.content.res.Resources
 import android.view.View
+import android.widget.ImageView
 import android.widget.TextView
 import com.bugcord.entities.CorePlugin
 import com.bugcord.patcher.Patcher
@@ -59,7 +61,8 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
             Boolean::class.javaPrimitiveType,
         ).apply { isAccessible = true }
 
-        val safeLinkParser = createParser.invoke(null, false, true, true, true, true)
+        // Enable markdown links (allowMaskedLinks = true) for both safe and masked parsers
+        val safeLinkParser = createParser.invoke(null, true, true, true, true, true)
         val maskedLinkParser = createParser.invoke(null, true, true, true, true, true)
         ReflectUtils.setFinalField(parserClass, null, "SAFE_LINK_PARSER", safeLinkParser)
         ReflectUtils.setFinalField(parserClass, null, "MASKED_LINK_PARSER", maskedLinkParser)
@@ -96,7 +99,7 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
                 position > 0 -> dp(itemView, 4)
                 else -> dp(itemView, 2)
             }
-            // Bottom padding: 1dp per user instruction
+            // Bottom padding: 1dp per user instruction to tightly match follower rows
             val bottom = dp(itemView, 1)
             itemView.setPadding(itemView.paddingLeft, top, itemView.paddingRight, bottom)
         }
@@ -115,6 +118,21 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
                 ) {
                     param.result = false
                 }
+            }
+        }
+
+        // Keep small images small in the viewport by setting minWidth to 0 (prevents upscaling to half-screen width)
+        runCatching {
+            patcher.before<EmbedResourceUtils>(
+                "calculateScaledSize",
+                Int::class.javaPrimitiveType!!,
+                Int::class.javaPrimitiveType!!,
+                Int::class.javaPrimitiveType!!,
+                Int::class.javaPrimitiveType!!,
+                Resources::class.java,
+                Int::class.javaPrimitiveType!!,
+            ) { param ->
+                param.args[5] = 0
             }
         }
 
@@ -202,8 +220,10 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
                 val descView = getBoundField(binding, "h") as? TextView
                 val titleView = getBoundField(binding, "r") as? TextView
                 val authorView = getBoundField(binding, "e") as? TextView
+                val imageView = getBoundField(binding, "m") as? ImageView
 
                 cardView?.visibility = View.VISIBLE
+                imageView?.adjustViewBounds = true
 
                 if (mediaView?.visibility != View.VISIBLE) {
                     contentView?.visibility = View.VISIBLE
