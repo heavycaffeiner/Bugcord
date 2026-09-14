@@ -112,6 +112,44 @@ internal object ScreenshareForeground {
             logger.error("Could not guard the screenshare against reconnects", it)
         }
 
+        // handleStateUpdate clears screen capture whenever the active stream key changes. Watching
+        // someone else's stream replaces the active stream with theirs, so the key differs and our
+        // own capture gets torn down. Suppress that teardown while we are the one streaming.
+        runCatching {
+            val manager = ScreenShareManager::class.java
+            val stateClass = Class.forName("com.discord.utilities.voice.ScreenShareManager\$State")
+            val handleStateUpdate = manager.getDeclaredMethod("handleStateUpdate", stateClass)
+                .apply { isAccessible = true }
+            val fPreviousState = manager.getDeclaredField("previousState").apply { isAccessible = true }
+            val getActiveStream = stateClass.getDeclaredMethod("getActiveStream")
+            val getMeId = stateClass.getDeclaredMethod("getMeId")
+            val activeStream = Class.forName("com.discord.stores.StoreApplicationStreaming\$ActiveApplicationStream")
+            val getStream = activeStream.getDeclaredMethod("getStream")
+            val getOwnerId = Class.forName("com.discord.models.domain.ModelApplicationStream")
+                .getDeclaredMethod("getOwnerId")
+
+            fun ownerOf(state: Any?): Long? {
+                val stream = state?.let { getActiveStream.invoke(it) }?.let { getStream.invoke(it) }
+                return stream?.let { getOwnerId.invoke(it) as? Long }
+            }
+
+            patcher.patch(handleStateUpdate, PreHook { param ->
+                val previous = fPreviousState.get(param.thisObject) ?: return@PreHook
+                val meId = getMeId.invoke(previous) as? Long ?: return@PreHook
+                // Only guard a stream we own; a foreign previous stream is not ours to keep
+                if (ownerOf(previous) != meId) return@PreHook
+
+                val next = param.args[0]
+                if (ownerOf(next) == meId) return@PreHook
+
+                // Keep our own stream as the manager's state so the capture survives
+                param.result = null
+                logger.info("Kept our screenshare while the active stream switched to another user")
+            })
+        }.onFailure {
+            logger.error("Could not guard the screenshare against stream switches", it)
+        }
+
         // Remove the hold because the screenshare intent gets cleared here
         patcher.after<ScreenShareManager>("stopStream") { releaseTeardown() }
 

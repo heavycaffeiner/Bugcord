@@ -181,12 +181,11 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
             ChatListEntry::class.java,
         ) { param ->
             val holder = param.thisObject as WidgetChatListAdapterItemMessage
-            val position = param.args[0] as? Int ?: return@after
             val entry = param.args[1] as? MessageEntry ?: return@after
             val itemView = holder.itemView as? ConstraintLayout ?: return@after
 
             val hasInlineMedia = renderInlineMedia(itemView, entry.message)
-            applySpacing(itemView, entry, position, hasInlineMedia)
+            applySpacing(itemView, entry, hasInlineMedia)
         }
     }
 
@@ -221,7 +220,7 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
                     LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.WRAP_CONTENT,
                         ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ).apply { topMargin = dp(root, 4) },
+                    ).apply { topMargin = dp(root, 2) },
                 )
             }
             bindMedia(view, item)
@@ -338,32 +337,15 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
         return message.embeds?.any { !isMergeableEmbed(it) } == true
     }
 
-    private fun applySpacing(itemView: View, entry: MessageEntry, position: Int, hasInlineMedia: Boolean) {
+    private fun applySpacing(itemView: View, entry: MessageEntry, hasInlineMedia: Boolean) {
         // Apply message spacing only to the first message; leave middle messages untouched
         if (entry.isMinimal()) return
 
         val message = entry.message
-        val content = message.content.orEmpty().trimStart()
-        val hasMarkdownOrEmbed = hasInlineMedia ||
-            message.hasEmbeds() ||
-            content.startsWith("#") ||
-            content.startsWith("-") ||
-            content.startsWith("*") ||
-            content.startsWith(">") ||
-            content.startsWith("```")
-
-        // Top padding:
-        // 4dp for media messages so the image is not glued to the header
-        // 2dp for markdown headers and lists, which already carry their own leading space
-        // 4dp for normal new author groups
-        val top = when {
-            hasInlineMedia -> dp(itemView, 4)
-            hasMarkdownOrEmbed -> dp(itemView, 2)
-            position > 0 -> dp(itemView, 4)
-            else -> dp(itemView, 2)
-        }
+        // Every first message gets the same 2dp lead, media or not
+        val top = dp(itemView, 2)
         // Rows that continue this message must touch it, otherwise they read as a separate message
-        val bottom = if (hasTrailingRows(message)) 0 else dp(itemView, 2)
+        val bottom = if (hasTrailingRows(message) || hasInlineMedia) 0 else dp(itemView, 2)
         itemView.setPadding(itemView.paddingLeft, top, itemView.paddingRight, bottom)
     }
 
@@ -527,7 +509,7 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
                 private fun applyEmbedPadding(param: MethodHookParam) {
                     val holder = param.thisObject as? WidgetChatListAdapterItemEmbed ?: return
                     holder.itemView.visibility = View.VISIBLE
-                    holder.itemView.setPadding(0, dp(holder.itemView, 4), 0, 0)
+                    holder.itemView.setPadding(0, dp(holder.itemView, 2), 0, 0)
                 }
             })
         }
@@ -541,7 +523,7 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
             ) { param ->
                 val holder = param.thisObject as WidgetChatListAdapterItemSticker
                 val view = holder.itemView
-                view.setPadding(view.paddingLeft, dp(view, 4), view.paddingRight, view.paddingBottom)
+                view.setPadding(view.paddingLeft, dp(view, 2), view.paddingRight, view.paddingBottom)
             }
         }
 
@@ -561,7 +543,7 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
             val embed = entry.embed
             holder.itemView.visibility = View.VISIBLE
             // Match the media message spacing so a standalone embed row is not glued to the header
-            holder.itemView.setPadding(0, dp(holder.itemView, 4), 0, 0)
+            holder.itemView.setPadding(0, dp(holder.itemView, 2), 0, 0)
 
             if (fBinding != null) {
                 val binding = fBinding.get(holder) ?: return@after

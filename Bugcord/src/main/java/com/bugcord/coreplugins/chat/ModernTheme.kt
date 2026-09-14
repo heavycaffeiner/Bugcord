@@ -87,19 +87,20 @@ internal class ModernTheme : CorePlugin(Manifest("ModernTheme")) {
         const val ALPHA_MASK = 0xFF000000.toInt()
 
         /**
-         * Legacy 126021 grey to Discord 344013 dark grey.
+         * Legacy 126021 grey to Discord 344013 "Darker" grey.
          * Left column is the legacy `primary_dark_*` ramp, right column the modern palette.
+         * Darker, not Dark: the surfaces drop to near black and the greys shift blue.
          */
         val PALETTE: Map<Int, Int> = mapOf(
             // Surfaces
-            0x36393F to 0x313338, // background primary, chat area
-            0x2F3136 to 0x2B2D31, // background secondary, channel list
-            0x292B2F to 0x232428, // background secondary alt, guild list
-            0x202225 to 0x1E1F22, // background tertiary
-            0x18191C to 0x111214, // background floating
+            0x36393F to 0x1A1B1E, // background primary, chat area
+            0x2F3136 to 0x131416, // background secondary, channel list
+            0x292B2F to 0x0F1014, // background secondary alt, guild list
+            0x202225 to 0x0A0A0C, // background tertiary
+            0x18191C to 0x070709, // background floating
             0x040405 to 0x000000, // deepest background
-            0x40444B to 0x383A40, // chat input, elevated controls
-            0x4F545C to 0x4E5058, // modifier accent, muted interactive
+            0x40444B to 0x242529, // chat input, elevated controls
+            0x4F545C to 0x6C6F7C, // modifier accent, muted interactive
             // Text. Pure white stays untouched: it also paints icons and active states
             0xDCDDDE to 0xDBDEE1, // text normal
             0xB9BBBE to 0xB5BAC1, // header secondary, interactive normal
