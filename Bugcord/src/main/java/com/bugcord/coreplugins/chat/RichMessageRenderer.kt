@@ -8,14 +8,21 @@ package com.bugcord.coreplugins.chat
 
 import android.content.Context
 import android.view.View
+import android.widget.TextView
 import com.bugcord.entities.CorePlugin
-import com.bugcord.patcher.Patcher
 import com.bugcord.patcher.after
+import com.bugcord.patcher.before
 import com.bugcord.utils.ReflectUtils
+import com.bugcord.wrappers.embeds.MessageEmbedWrapper
+import com.discord.api.channel.Channel
+import com.discord.models.member.GuildMember
+import com.discord.models.message.Message
+import com.discord.stores.StoreMessageState
 import com.discord.utilities.textprocessing.DiscordParser
 import com.discord.widgets.chat.list.adapter.WidgetChatListAdapterItemEmbed
 import com.discord.widgets.chat.list.adapter.WidgetChatListAdapterItemMessage
 import com.discord.widgets.chat.list.entries.ChatListEntry
+import com.discord.widgets.chat.list.entries.EmbedEntry
 import com.discord.widgets.chat.list.entries.MessageEntry
 import java.util.regex.Pattern
 
@@ -27,7 +34,7 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
     override fun start(context: Context) {
         configureParser()
         patchAvatarGroupSpacing()
-        patchEmbedVisibility()
+        patchEmbedRendering()
     }
 
     private fun configureParser() {
@@ -62,33 +69,98 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
             val holder = param.thisObject as WidgetChatListAdapterItemMessage
             val position = param.args[0] as? Int ?: return@after
             val entry = param.args[1] as? MessageEntry ?: return@after
-            val itemView = holder.itemView
 
-            // All continuing messages have a uniform 2dp top and 2dp bottom padding,
-            // resulting in an exact 4dp gap between every pair of messages in a group.
-            // A non-minimal row starts a new author group with a 16dp gap before it.
-            val top = if (!entry.isMinimal()) {
-                if (position > 0) dp(itemView, 16) else dp(itemView, 8)
-            } else {
-                dp(itemView, 2)
-            }
-            val bottom = dp(itemView, 2)
+            // Apply message spacing only to the first message; leave middle messages untouched
+            if (entry.isMinimal()) return@after
+
+            val itemView = holder.itemView
+            val top = if (position > 0) dp(itemView, 16) else dp(itemView, 10)
+            val bottom = dp(itemView, 4)
             itemView.setPadding(itemView.paddingLeft, top, itemView.paddingRight, bottom)
         }
     }
 
-    private fun patchEmbedVisibility() {
+    private fun patchEmbedRendering() {
+        // Ensure embeds are always created and never dropped by user setting checks
+        runCatching {
+            patcher.before<ChatListEntry.Companion>(
+                "createEmbedEntries",
+                Message::class.java,
+                StoreMessageState.State::class.java,
+                Boolean::class.javaPrimitiveType!!,
+                Boolean::class.javaPrimitiveType!!,
+                Boolean::class.javaPrimitiveType!!,
+                Boolean::class.javaPrimitiveType!!,
+                Boolean::class.javaPrimitiveType!!,
+                Channel::class.java,
+                GuildMember::class.java,
+                Map::class.java,
+                Map::class.java,
+            ) { param ->
+                param.args[5] = true
+            }
+        }
+
+        // Always allow media rendering in embeds
+        runCatching {
+            patcher.before<WidgetChatListAdapterItemEmbed>("shouldRenderMedia") { param ->
+                param.result = true
+            }
+        }
+
+        val fBinding = runCatching {
+            WidgetChatListAdapterItemEmbed::class.java.getDeclaredField("binding").apply {
+                isAccessible = true
+            }
+        }.getOrNull()
+
         patcher.after<WidgetChatListAdapterItemEmbed>(
             "onConfigure",
             Int::class.javaPrimitiveType!!,
             ChatListEntry::class.java,
         ) { param ->
             val holder = param.thisObject as WidgetChatListAdapterItemEmbed
-            if (holder.itemView.visibility == View.GONE) {
-                holder.itemView.visibility = View.VISIBLE
+            val entry = param.args[1] as? EmbedEntry ?: return@after
+            val embed = entry.embed
+            holder.itemView.visibility = View.VISIBLE
+
+            if (fBinding != null) {
+                val binding = fBinding.get(holder) ?: return@after
+                val cardView = getBoundField(binding, "f") as? View
+                val contentView = getBoundField(binding, "g") as? View
+                val dividerView = getBoundField(binding, "i") as? View
+                val mediaView = getBoundField(binding, "t") as? View
+                val descView = getBoundField(binding, "h") as? TextView
+                val titleView = getBoundField(binding, "r") as? TextView
+
+                cardView?.visibility = View.VISIBLE
+
+                if (mediaView?.visibility != View.VISIBLE) {
+                    contentView?.visibility = View.VISIBLE
+                    dividerView?.visibility = View.VISIBLE
+                }
+
+                val wrapper = MessageEmbedWrapper(embed)
+                val rawTitle = wrapper.title
+                if (!rawTitle.isNullOrBlank() && titleView != null && titleView.text.isNullOrBlank()) {
+                    titleView.text = rawTitle
+                    titleView.visibility = View.VISIBLE
+                    contentView?.visibility = View.VISIBLE
+                }
+
+                val rawDesc = wrapper.description
+                if (!rawDesc.isNullOrBlank() && descView != null && descView.text.isNullOrBlank()) {
+                    descView.text = rawDesc
+                    descView.visibility = View.VISIBLE
+                    contentView?.visibility = View.VISIBLE
+                }
             }
         }
     }
+
+    private fun getBoundField(target: Any, name: String): Any? = runCatching {
+        target.javaClass.getDeclaredField(name).apply { isAccessible = true }.get(target)
+    }.getOrNull()
 
     private fun MessageEntry.isMinimal(): Boolean = runCatching {
         javaClass.getDeclaredField("isMinimal").apply { isAccessible = true }.getBoolean(this)
