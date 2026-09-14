@@ -77,15 +77,19 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
     private val mediaContainerId = View.generateViewId()
 
     override fun start(context: Context) {
-        // Must run before any parser is built so every cached parser picks up the fixed rules
-        patchListItemRule()
-        patchBoldRendering()
-        patchHeaderRendering()
-        patchCodeBlockPadding()
-        configureParser()
-        patchMessageLayout()
-        patchEmbedRendering()
-        patchImageLinkSuppression()
+        // configureParser must run before any parser is built, and it must not be able to take the
+        // view patches down with it: setFinalField can throw on a hidden-API change, and everything
+        // after it in this list would then never run
+        runCatching { patchListItemRule() }
+        runCatching { patchBoldRendering() }
+        runCatching { patchHeaderRendering() }
+        runCatching { configureParser() }
+            .onFailure { logger.error("Failed to install the markdown parsers", it) }
+        runCatching { patchMessageLayout() }
+            .onFailure { logger.error("Failed to patch the message layout", it) }
+        runCatching { patchEmbedRendering() }
+            .onFailure { logger.error("Failed to patch embed rendering", it) }
+        runCatching { patchImageLinkSuppression() }
     }
 
     /**
@@ -176,38 +180,11 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
         ReflectUtils.setFinalField(parserClass, null, "MASKED_LINK_PARSER", maskedLinkParser)
     }
 
-    /**
-     * A code block renders a trailing newline inside its own background span, so the block paints
-     * one empty line past its last line of code and the 5dp bottom padding sits below that. Pull
-     * the block spans back off the newline; the newline itself stays so the block still separates
-     * from whatever follows.
-     */
-    private fun patchCodeBlockPadding() {
-        runCatching {
-            val node = Class.forName("com.discord.utilities.textprocessing.node.BlockBackgroundNode")
-            val render = node.getDeclaredMethod(
-                "render",
-                SpannableStringBuilder::class.java,
-                BasicRenderContext::class.java,
-            )
-            Patcher.addPatch(render, object : XC_MethodHook() {
-                override fun afterHookedMethod(param: MethodHookParam) {
-                    val builder = param.args[0] as? SpannableStringBuilder ?: return
-                    val end = builder.length
-                    if (end == 0 || builder[end - 1] != '\n') return
-
-                    for (span in builder.getSpans(0, end, Any::class.java)) {
-                        if (span !is BlockBackgroundSpan && span !is VerticalPaddingSpan) continue
-                        if (builder.getSpanEnd(span) != end) continue
-                        val start = builder.getSpanStart(span)
-                        val flags = builder.getSpanFlags(span)
-                        if (start >= end - 1) continue
-                        builder.setSpan(span, start, end - 1, flags)
-                    }
-                }
-            })
-        }
-    }
+    // A code block's trailing newline sits inside its background span, which paints one extra
+    // empty line. Both fixes tried so far regressed worse than the padding they removed: pulling
+    // the span off the newline dropped the background on short blocks, and deleting the newline
+    // glues the next node onto the last line of code, because siblings append after this returns.
+    // Left at stock until it can be verified on a device.
 
     private fun patchMessageLayout() {
         patcher.after<WidgetChatListAdapterItemMessage>(

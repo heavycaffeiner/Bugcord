@@ -37,8 +37,15 @@ internal class RemoteSlashCommands : CorePlugin(Manifest("RemoteSlashCommands"))
     override val isRequired = true
 
     private val store by lazy { StoreStream.getApplicationCommands() }
+    private val storeClass = StoreApplicationCommands::class.java
     private val dispatcher by lazy {
-        ReflectUtils.getField(StoreApplicationCommands::class.java, store, "dispatcher") as Dispatcher
+        ReflectUtils.getField(storeClass, store, "dispatcher") as Dispatcher
+    }
+    private val loadingField by lazy {
+        storeClass.getDeclaredField("isLoadingDiscoveryCommands").apply { isAccessible = true }
+    }
+    private val discoverNonceField by lazy {
+        storeClass.getDeclaredField("discoverCommandsNonce").apply { isAccessible = true }
     }
 
     override fun start(context: Context) {
@@ -89,10 +96,14 @@ internal class RemoteSlashCommands : CorePlugin(Manifest("RemoteSlashCommands"))
                     .execute()
                 response.assertOk()
 
-                // The search payload uses the same field names the legacy model expects, so the
-                // guild id and the originating nonce are all that has to be grafted on
+                // The store routes a payload by nonce and keeps a separate one per path, so echo
+                // the nonce that is actually in flight rather than the one passed to the gateway
+                val routedNonce = runCatching {
+                    discoverNonceField.get(store) as? String
+                }.getOrNull() ?: nonce
+
                 val json = JSONObject(response.text()).apply {
-                    put("nonce", nonce)
+                    put("nonce", routedNonce)
                     put("guild_id", guildId.toString())
                 }
 
@@ -100,15 +111,17 @@ internal class RemoteSlashCommands : CorePlugin(Manifest("RemoteSlashCommands"))
                     .fromJson(json.toString(), GuildApplicationCommands::class.java)
 
                 // The store mutates its state on the dispatcher thread only
-                dispatcher.schedule { store.handleApplicationCommandsUpdate(commands) }
+                dispatcher.schedule {
+                    store.handleApplicationCommandsUpdate(commands)
+                    // requestApplicationCommands latches this before calling the gateway and only
+                    // clears it on a real response; left set, every later request returns early
+                    runCatching { loadingField.setBoolean(store, false) }
+                }
             }.onFailure {
                 logger.error("Failed to fetch application commands for guild $guildId", it)
+                runCatching { dispatcher.schedule { loadingField.setBoolean(store, false) } }
             }
         }
-    }
-
-    override fun stop(context: Context) {
-        patcher.unpatchAll()
     }
 
     private companion object {

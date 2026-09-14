@@ -44,14 +44,15 @@ internal class ForwardAction : CorePlugin(Manifest("ForwardAction")) {
             val layout = root.findViewById<LinearLayout>("dialog_chat_actions_container") ?: return@after
             if (layout.findViewById<View>(forwardViewId) != null) return@after
 
-            // The channel picker reports back through the sheet, so register before it can open
-            WidgetChannelSelector.Companion!!.registerForResult(
-                this,
-                RESULT_KEY,
-                false,
-            ) { channelId, _ ->
-                forward(message, channelId)
-                dismiss()
+            // registerForResult binds the listener to this sheet's own lifecycle, and the picker
+            // only reports back after this sheet is gone, so that listener is already destroyed.
+            // Listen on the parent manager instead, which outlives both sheets.
+            val manager = this.parentFragmentManager
+            val owner = this.requireActivity()
+            manager.setFragmentResultListener(RESULT_KEY, owner) { _, bundle ->
+                val channelId = bundle.getLong(RESULT_CHANNEL_ID)
+                if (channelId > 0L) forward(message, channelId)
+                manager.clearFragmentResultListener(RESULT_KEY)
             }
 
             val entry = makeEntry(layout.context) {
@@ -63,6 +64,7 @@ internal class ForwardAction : CorePlugin(Manifest("ForwardAction")) {
                     false,
                     0,
                 )
+                dismiss()
             }
 
             // Sit next to Reply, which is where 344013 puts Forward
@@ -130,5 +132,8 @@ internal class ForwardAction : CorePlugin(Manifest("ForwardAction")) {
 
     private companion object {
         const val RESULT_KEY = "BUGCORD_FORWARD_TARGET"
+
+        /** Key WidgetChannelSelector puts the picked channel under. */
+        const val RESULT_CHANNEL_ID = "INTENT_EXTRA_CHANNEL_ID"
     }
 }

@@ -8,6 +8,7 @@ import com.bugcord.api.PatcherAPI
 import com.bugcord.patcher.InsteadHook
 import com.bugcord.patcher.PreHook
 import com.bugcord.patcher.after
+import com.discord.stores.StoreStream
 import com.discord.utilities.voice.ScreenShareManager
 import com.discord.utilities.voice.VoiceEngineForegroundService
 import com.discord.utilities.voice.VoiceEngineServiceController
@@ -112,39 +113,43 @@ internal object ScreenshareForeground {
             logger.error("Could not guard the screenshare against reconnects", it)
         }
 
-        // handleStateUpdate clears screen capture whenever the active stream key changes. Watching
-        // someone else's stream replaces the active stream with theirs, so the key differs and our
-        // own capture gets torn down. Suppress that teardown while we are the one streaming.
+        // Watching someone else's stream runs through StoreStreamRtcConnection, which keeps a
+        // single stream connection: handleStreamCreate builds one for the watched stream and
+        // updateRtcConnection destroys the previous one, which is our own broadcast. Skip the
+        // create while we are streaming ourselves, so our connection is left alone.
         runCatching {
-            val manager = ScreenShareManager::class.java
-            val stateClass = Class.forName("com.discord.utilities.voice.ScreenShareManager\$State")
-            val handleStateUpdate = manager.getDeclaredMethod("handleStateUpdate", stateClass)
+            val storeClass = Class.forName("com.discord.stores.StoreStreamRtcConnection")
+            val createOrUpdate = Class.forName("com.discord.models.domain.StreamCreateOrUpdate")
+            val handleStreamCreate = storeClass
+                .getDeclaredMethod("handleStreamCreate", createOrUpdate)
                 .apply { isAccessible = true }
-            val fPreviousState = manager.getDeclaredField("previousState").apply { isAccessible = true }
-            val getActiveStream = stateClass.getDeclaredMethod("getActiveStream")
-            val getMeId = stateClass.getDeclaredMethod("getMeId")
-            val activeStream = Class.forName("com.discord.stores.StoreApplicationStreaming\$ActiveApplicationStream")
-            val getStream = activeStream.getDeclaredMethod("getStream")
+            val fStreamOwner = storeClass.getDeclaredField("streamOwner").apply { isAccessible = true }
+            val getStreamKey = createOrUpdate.getDeclaredMethod("getStreamKey")
+            val decodeStreamKey = Class.forName("com.discord.models.domain.ModelApplicationStream\$Companion")
+                .getDeclaredMethod("decodeStreamKey", String::class.java)
+            val companion = Class.forName("com.discord.models.domain.ModelApplicationStream")
+                .getDeclaredField("Companion").apply { isAccessible = true }
+                .get(null)
             val getOwnerId = Class.forName("com.discord.models.domain.ModelApplicationStream")
                 .getDeclaredMethod("getOwnerId")
 
-            fun ownerOf(state: Any?): Long? {
-                val stream = state?.let { getActiveStream.invoke(it) }?.let { getStream.invoke(it) }
-                return stream?.let { getOwnerId.invoke(it) as? Long }
-            }
+            patcher.patch(handleStreamCreate, PreHook { param ->
+                if (!isStreaming()) return@PreHook
 
-            patcher.patch(handleStateUpdate, PreHook { param ->
-                val previous = fPreviousState.get(param.thisObject) ?: return@PreHook
-                val meId = getMeId.invoke(previous) as? Long ?: return@PreHook
-                // Only guard a stream we own; a foreign previous stream is not ours to keep
-                if (ownerOf(previous) != meId) return@PreHook
+                val meId = runCatching { StoreStream.getUsers().me.id }.getOrNull() ?: return@PreHook
+                // Our own stream still has to go through, otherwise starting one never connects
+                val owner = runCatching {
+                    val key = getStreamKey.invoke(param.args[0]) as? String ?: return@runCatching null
+                    val stream = decodeStreamKey.invoke(companion, key) ?: return@runCatching null
+                    getOwnerId.invoke(stream) as? Long
+                }.getOrNull() ?: return@PreHook
+                if (owner == meId) return@PreHook
 
-                val next = param.args[0]
-                if (ownerOf(next) == meId) return@PreHook
-
-                // Keep our own stream as the manager's state so the capture survives
+                // Leave streamOwner untouched so the store still reflects our own broadcast
+                val current = fStreamOwner.get(param.thisObject)
                 param.result = null
-                logger.info("Kept our screenshare while the active stream switched to another user")
+                fStreamOwner.set(param.thisObject, current)
+                logger.info("Skipped the watched stream connection, our screenshare stays up")
             })
         }.onFailure {
             logger.error("Could not guard the screenshare against stream switches", it)
