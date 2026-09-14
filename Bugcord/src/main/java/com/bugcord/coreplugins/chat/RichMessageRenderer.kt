@@ -213,9 +213,10 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
 
                     val spanEnd = text.getSpanEnd(span)
                     if (spanEnd == end) {
-                        val pad = span.paddingBottom.coerceAtLeast(1)
-                        fm.bottom = fm.bottom - span.paddingBottom + pad
-                        fm.descent = fm.descent - span.paddingBottom + pad
+                        fm.ascent = -4
+                        fm.top = -4
+                        fm.descent = 0
+                        fm.bottom = 0
                     }
                 }
             })
@@ -223,15 +224,32 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
 
         runCatching {
             val bbsClass = Class.forName("com.discord.utilities.spans.BlockBackgroundSpan")
-            val fRect = bbsClass.getDeclaredField("rect").apply { isAccessible = true }
-            val drawMethod = bbsClass.getDeclaredMethod("draw", Canvas::class.java)
-            Patcher.addPatch(drawMethod, object : XC_MethodHook() {
+            val dbMethod = bbsClass.getDeclaredMethod(
+                "drawBackground",
+                Canvas::class.java,
+                Paint::class.java,
+                Int::class.javaPrimitiveType!!,
+                Int::class.javaPrimitiveType!!,
+                Int::class.javaPrimitiveType!!,
+                Int::class.javaPrimitiveType!!,
+                Int::class.javaPrimitiveType!!,
+                CharSequence::class.java,
+                Int::class.javaPrimitiveType!!,
+                Int::class.javaPrimitiveType!!,
+                Int::class.javaPrimitiveType!!,
+            )
+            Patcher.addPatch(dbMethod, object : XC_MethodHook() {
                 override fun beforeHookedMethod(param: MethodHookParam) {
                     val span = param.thisObject as? BlockBackgroundSpan ?: return
-                    val rect = fRect.get(span) as? RectF ?: return
-                    val canvas = param.args[0] as? Canvas ?: return
-                    val density = canvas.density.let { if (it > 0) it / 160f else 2.5f }
-                    rect.bottom -= 14f * density
+                    val text = param.args[7] as? Spanned ?: return
+                    val end = param.args[9] as? Int ?: return
+                    val spanEnd = text.getSpanEnd(span)
+                    if (spanEnd == end) {
+                        val origBottom = param.args[6] as? Int ?: return
+                        val top = param.args[4] as? Int ?: 0
+                        val pull = 40
+                        param.args[6] = (origBottom - pull).coerceAtLeast(top)
+                    }
                 }
             })
         }
@@ -429,21 +447,17 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
 
     /** True when the message still produces embed or attachment rows of its own. */
     private fun hasTrailingRows(message: Message): Boolean {
-        if (message.attachments?.any { !isMergeableAttachment(it) } == true) return true
-        return message.embeds?.any { !isMergeableEmbed(it) } == true
+        if (!message.attachments.isNullOrEmpty()) return true
+        if (!message.embeds.isNullOrEmpty()) return true
+        if (!message.stickers.isNullOrEmpty()) return true
+        return false
     }
 
     private fun applySpacing(itemView: View, entry: MessageEntry, hasInlineMedia: Boolean, position: Int) {
-        // Apply message spacing only to the first message; leave middle messages untouched
-        if (entry.isMinimal()) return
-
         val message = entry.message
-        // Every first message gets the same 2dp lead, media or not
-        val top = dp(itemView, 2)
-        // The last message right above the chat input bar (position <= 1 in reverse layout) or
-        // messages continuing with trailing rows get 0 bottom padding to avoid an excessive gap
         val isLastMessage = position <= 1
-        val bottom = if (isLastMessage || hasTrailingRows(message) || hasInlineMedia) 0 else dp(itemView, 2)
+        val top = if (entry.isMinimal()) dp(itemView, 1) else dp(itemView, 2)
+        val bottom = if (isLastMessage || hasTrailingRows(message) || hasInlineMedia) 0 else dp(itemView, 1)
         itemView.setPadding(itemView.paddingLeft, top, itemView.paddingRight, bottom)
     }
 
@@ -533,11 +547,21 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
         // Supply fallback dimensions when embed images lack width or height
         runCatching {
             patcher.after<EmbedResourceUtils>("getPreviewImage", MessageEmbed::class.java) { param ->
-                val media = param.result as? RenderableEmbedMedia ?: return@after
-                val w = media.b
-                val h = media.c
-                if (w == null || w <= 0 || h == null || h <= 0) {
-                    param.result = RenderableEmbedMedia(media.a, 400, 300)
+                val embed = param.args[0] as? MessageEmbed ?: return@after
+                val media = param.result as? RenderableEmbedMedia
+                if (media != null) {
+                    val w = media.b
+                    val h = media.c
+                    if (w == null || w <= 0 || h == null || h <= 0) {
+                        param.result = RenderableEmbedMedia(media.a, 400, 300)
+                    }
+                } else {
+                    val imgUrl = embed.f()?.c() ?: embed.h()?.c()
+                    if (!imgUrl.isNullOrBlank()) {
+                        val w = embed.f()?.d() ?: embed.h()?.d() ?: 400
+                        val h = embed.f()?.a() ?: embed.h()?.a() ?: 300
+                        param.result = RenderableEmbedMedia(imgUrl, w, h)
+                    }
                 }
             }
         }
@@ -580,8 +604,7 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
             ) { param ->
                 val entries = param.result as? List<*> ?: return@after
                 val kept = entries.filterNot {
-                    it is AttachmentEntry && isMergeableAttachment(it.attachment) ||
-                        it is EmbedEntry && isMergeableEmbed(it.embed)
+                    it is AttachmentEntry && isMergeableAttachment(it.attachment)
                 }
                 if (kept.size != entries.size) param.result = kept
             }
@@ -594,36 +617,6 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
             }
         }
 
-        // Hook configureUI directly so the item view stays visible with the intended spacing
-        runCatching {
-            val modelClass = Class.forName("com.discord.widgets.chat.list.adapter.WidgetChatListAdapterItemEmbed\$Model")
-            val configureUIMethod = WidgetChatListAdapterItemEmbed::class.java.getDeclaredMethod("configureUI", modelClass)
-            configureUIMethod.isAccessible = true
-            Patcher.addPatch(configureUIMethod, object : XC_MethodHook() {
-                override fun beforeHookedMethod(param: MethodHookParam) = applyEmbedPadding(param)
-
-                override fun afterHookedMethod(param: MethodHookParam) = applyEmbedPadding(param)
-
-                private fun applyEmbedPadding(param: MethodHookParam) {
-                    val holder = param.thisObject as? WidgetChatListAdapterItemEmbed ?: return
-                    holder.itemView.visibility = View.VISIBLE
-                    holder.itemView.setPadding(0, dp(holder.itemView, 2), 0, 0)
-                }
-            })
-        }
-
-        // Stickers render in their own row and need the same leading gap as media
-        runCatching {
-            patcher.after<WidgetChatListAdapterItemSticker>(
-                "onConfigure",
-                Int::class.javaPrimitiveType!!,
-                ChatListEntry::class.java,
-            ) { param ->
-                val holder = param.thisObject as WidgetChatListAdapterItemSticker
-                val view = holder.itemView
-                view.setPadding(view.paddingLeft, dp(view, 2), view.paddingRight, view.paddingBottom)
-            }
-        }
 
         val fBinding = runCatching {
             WidgetChatListAdapterItemEmbed::class.java.getDeclaredField("binding").apply {
@@ -659,8 +652,7 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
                 val titleView = getBoundField(binding, "r") as? TextView
                 val authorView = getBoundField(binding, "e") as? TextView
                 val imageView = getBoundField(binding, "m") as? ImageView
-
-                cardView?.visibility = View.VISIBLE
+                val imageContainer = getBoundField(binding, "s") as? View
                 imageView?.adjustViewBounds = true
 
                 (cardView?.layoutParams as? ViewGroup.MarginLayoutParams)?.let { params ->
@@ -697,6 +689,14 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
                 if (!rawDesc.isNullOrBlank() && descView != null && descView.text.isNullOrBlank()) {
                     descView.text = rawDesc
                     descView.visibility = View.VISIBLE
+                    contentView?.visibility = View.VISIBLE
+                }
+                // Ensure bot embed image is visible
+                val imgUrl = embed.f()?.c() ?: embed.h()?.c()
+                if (!imgUrl.isNullOrBlank()) {
+                    imageContainer?.visibility = View.VISIBLE
+                    imageView?.visibility = View.VISIBLE
+                    imageView?.adjustViewBounds = true
                     contentView?.visibility = View.VISIBLE
                 }
             }
@@ -738,6 +738,29 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
                         params.bottomMargin = 0
                         media.layoutParams = params
                     }
+                }
+            }
+        }
+        patcher.after<WidgetChatListAdapterItemSticker>(
+            "onConfigure",
+            Int::class.javaPrimitiveType!!,
+            ChatListEntry::class.java,
+        ) { param ->
+            val holder = param.thisObject as WidgetChatListAdapterItemSticker
+            holder.itemView.setPadding(0, 0, 0, 0)
+            (holder.itemView.layoutParams as? ViewGroup.MarginLayoutParams)?.let { params ->
+                if (params.topMargin != 0 || params.bottomMargin != 0) {
+                    params.topMargin = 0
+                    params.bottomMargin = 0
+                    holder.itemView.layoutParams = params
+                }
+            }
+            val stickerView = holder.itemView.findViewById<View>(0x7f0a0352)
+            (stickerView?.layoutParams as? ViewGroup.MarginLayoutParams)?.let { params ->
+                if (params.topMargin != 0 || params.bottomMargin != 0) {
+                    params.topMargin = 0
+                    params.bottomMargin = 0
+                    stickerView.layoutParams = params
                 }
             }
         }
