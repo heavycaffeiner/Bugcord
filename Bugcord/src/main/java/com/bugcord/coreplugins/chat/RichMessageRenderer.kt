@@ -50,6 +50,8 @@ import com.discord.models.message.Message
 import com.discord.simpleast.core.node.Node
 import com.discord.simpleast.core.parser.ParseSpec
 import com.discord.simpleast.core.parser.Parser
+import com.discord.utilities.color.ColorCompat
+import com.lytefast.flexinput.R
 import com.discord.simpleast.core.parser.Rule
 import com.discord.stores.StoreMessageState
 import com.discord.stores.StoreStream
@@ -267,7 +269,6 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
             ChatListEntry::class.java,
         ) { param ->
             val holder = param.thisObject as WidgetChatListAdapterItemMessage
-            val position = param.args[0] as? Int ?: return@after
             val entry = param.args[1] as? MessageEntry ?: return@after
             val itemView = holder.itemView as? ConstraintLayout ?: return@after
 
@@ -276,7 +277,7 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
             val hasInlineMedia = runCatching { renderInlineMedia(itemView, entry.message) }
                 .onFailure { logger.error("Failed to render inline media", it) }
                 .getOrDefault(false)
-            runCatching { applySpacing(itemView, entry, hasInlineMedia, position) }
+            runCatching { applySpacing(itemView, entry, hasInlineMedia) }
                 .onFailure { logger.error("Failed to apply message spacing", it) }
         }
 
@@ -371,18 +372,21 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
                 container.layoutParams = lp
             }
         }
-        // Views are recycled across channels, and bindMedia loads asynchronously, so a view can
-        // finish loading the previous row's picture after it has been rebound. Tag each view with
-        // the message it belongs to and rebind whenever that tag does not match. The keyed setTag
-        // overload rejects anything that is not an aapt resource id, so use the plain slot
+        // Rows are recycled across channels. A reused InlineMediaView keeps showing the previous
+        // picture until its new load lands, and the purge on setData cannot reach rows sitting in
+        // the scrap pool. So whenever the container belongs to a different message, throw the old
+        // views away and build fresh ones: nothing is left holding a former channel's bitmap
         val messageKey = message.id
-        container.tag = messageKey
+        if (container.tag != messageKey) {
+            container.removeAllViews()
+            container.tag = messageKey
+        }
         while (container.childCount > media.size) container.removeViewAt(container.childCount - 1)
+
         media.forEachIndexed { index, item ->
             val view = container.getChildAt(index) as? InlineMediaView ?: InlineMediaView(root.context).also {
                 it.radius = dp(root, 8).toFloat()
                 it.cardElevation = 0f
-                it.setCardBackgroundColor(Color.TRANSPARENT)
                 container.addView(
                     it,
                     LinearLayout.LayoutParams(
@@ -391,6 +395,21 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
                     ).apply { topMargin = 0 },
                 )
             }
+
+            // Reserve the final size up front and keep the placeholder tint behind it, so the row
+            // holds its space while loading instead of collapsing and then jumping
+            val (reservedWidth, reservedHeight) = reservedSize(view, item)
+            view.setCardBackgroundColor(ColorCompat.getThemedColor(view.context, R.b.colorBackgroundSecondary))
+            (view.layoutParams as? LinearLayout.LayoutParams)?.let { lp ->
+                if (reservedWidth > 0 && reservedHeight > 0 &&
+                    (lp.width != reservedWidth || lp.height != reservedHeight)
+                ) {
+                    lp.width = reservedWidth
+                    lp.height = reservedHeight
+                    view.layoutParams = lp
+                }
+            }
+
             val key = "$messageKey#$index"
             if (view.tag != key) {
                 view.tag = key
@@ -441,6 +460,16 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
                 view.setOnClickListener { WidgetMedia.Companion!!.launch(it.context, item) }
             }
         }
+    }
+
+    /** The size a media view will settle at, used to hold the space open while it loads. */
+    private fun reservedSize(view: View, item: Any): Pair<Int, Int> = when (item) {
+        is MessageAttachment -> scaledSize(view, item.width ?: 0, item.height ?: 0)
+        is MessageEmbed -> {
+            val preview = EmbedResourceUtils.INSTANCE.getPreviewImage(item)
+            scaledSize(view, preview?.b ?: 0, preview?.c ?: 0)
+        }
+        else -> ViewGroup.LayoutParams.WRAP_CONTENT to ViewGroup.LayoutParams.WRAP_CONTENT
     }
 
     /**
@@ -495,11 +524,24 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
         (attachment.width ?: 0) > 0 && (attachment.height ?: 0) > 0
     }.getOrDefault(false)
 
+    /**
+     * An embed is drawn inside the message row when it is purely a picture, which covers a bare
+     * image link and a markdown link pointing at an image. Anything carrying its own text stays a
+     * card. isInlineEmbed cannot be used here: the parser hook above forces it false for embeds
+     * with text so they render as cards, so it would reject every picture too.
+     */
     private fun isMergeableEmbed(embed: MessageEmbed): Boolean = runCatching {
         val settings = StoreStream.getUserSettings()
         if (!settings.getIsEmbedMediaInlined() || !settings.getIsRenderEmbedsEnabled()) return@runCatching false
-        // Rich embeds carry text and keep rendering as a card
-        if (!EmbedResourceUtils.INSTANCE.isInlineEmbed(embed)) return@runCatching false
+
+        val wrapper = MessageEmbedWrapper(embed)
+        val carriesText = !wrapper.title.isNullOrBlank() ||
+            !wrapper.description.isNullOrBlank() ||
+            wrapper.author != null ||
+            !wrapper.fields.isNullOrEmpty() ||
+            wrapper.footer != null
+        if (carriesText) return@runCatching false
+
         val preview = EmbedResourceUtils.INSTANCE.getPreviewImage(embed) ?: return@runCatching false
         (preview.b ?: 0) > 0 && (preview.c ?: 0) > 0
     }.getOrDefault(false)
@@ -512,16 +554,19 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
         return false
     }
 
-    private fun applySpacing(itemView: View, entry: MessageEntry, hasInlineMedia: Boolean, position: Int) {
+    /**
+     * Spacing must not depend on the row's position. RecyclerView does not rebind a row when other
+     * rows are inserted above it, so a position derived padding stays frozen at its bind time value
+     * and the gap silently goes stale. The 16dp spacer entry already separates the newest row from
+     * the input box, so no position special case is needed here.
+     */
+    private fun applySpacing(itemView: View, entry: MessageEntry, hasInlineMedia: Boolean) {
         val message = entry.message
-        val isLastMessage = position <= 1
         val isGroupStart = !entry.isMinimal()
         // A non-minimal row opens a new author group and gets the wider lead; continuations stay tight
         val top = if (isGroupStart) dp(itemView, 4) else dp(itemView, 1)
-        // Media and embeds bring their own 4dp lead, so the row must not add a second gap there.
-        // Otherwise a group start keeps its own 4dp below the avatar row
+        // Media and embeds bring their own 4dp lead, so the row must not add a second gap there
         val bottom = when {
-            isLastMessage -> 0
             hasTrailingRows(message) || hasInlineMedia -> 0
             isGroupStart -> dp(itemView, 4)
             else -> dp(itemView, 1)
