@@ -86,6 +86,16 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
     private val mediaContainerId = View.generateViewId()
 
     /**
+     * Keys of the entries a message row has drawn itself. A standalone row is only collapsed once
+     * its key is in here, so media is never hidden without a visible copy existing. Bounded, since
+     * a channel's history is unbounded and only recently bound rows can still be on screen.
+     */
+    private val inlinedKeys: MutableSet<String> =
+        Collections.newSetFromMap(object : LinkedHashMap<String, Boolean>(64, 0.75f, true) {
+            override fun removeEldestEntry(eldest: Map.Entry<String, Boolean>) = size > 256
+        })
+
+    /**
      * Builders whose code block trailing newline was removed, awaiting a sibling node. Weak and
      * identity based so a builder that is never appended to is collected rather than retained.
      */
@@ -294,6 +304,7 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
         if (entries.isEmpty()) {
             if (container.childCount > 0) container.removeAllViews()
             container.visibility = View.GONE
+            container.tag = null
             return
         }
         container.visibility = View.VISIBLE
@@ -301,21 +312,21 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
         // Rebuild whenever the row's contents change identity, so a recycled row can never keep a
         // holder bound to another message. The keys already carry the entry index and the message id
         val key = entries.joinToString("|") { it.key }
-        if (container.getTag(mediaContainerId) != key) {
-            container.removeAllViews()
-            entries.forEach { child ->
-                val hosted = hostHolder(child, adapter) ?: return@forEach
-                // Marks this view as the inlined copy, so the collapse hook leaves it visible
-                hosted.itemView.setTag(mediaContainerId, HOSTED_ROW)
-                hosted.itemView.layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                )
-                runCatching { hosted.onConfigure(child.type, child) }
-                    .onFailure { logger.error("Failed to configure an inlined media row", it) }
-            }
-            container.setTag(mediaContainerId, key)
+        if (container.tag == key) return
+
+        container.removeAllViews()
+        entries.forEach { child ->
+            val hosted = hostHolder(child, adapter) ?: return@forEach
+            hosted.itemView.layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            )
+            container.addView(hosted.itemView)
+            runCatching { hosted.onConfigure(child.type, child) }
+                .onFailure { logger.error("Failed to configure an inlined media row", it) }
+            inlinedKeys.add(child.key)
         }
+        container.tag = key
     }
 
     /** The stock holder that draws [entry], or null when the entry is not a media row. */
@@ -330,16 +341,21 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
     }
 
     /**
-     * Collapses a standalone media row to nothing. The message row above it already drew the same
-     * entry, so the row would otherwise be a second copy. Views hosted inside a message row carry a
-     * marker and are left alone, since those are the copies that must stay visible.
+     * Collapses a standalone media row whose entry a message row already drew. A row is only
+     * collapsed once its key is known to be inlined, so a failure to inline leaves the stock row
+     * visible rather than hiding the media entirely.
      */
-    private fun collapseInlinedRow(holder: WidgetChatListItem?) {
+    private fun collapseInlinedRow(holder: WidgetChatListItem?, entry: ChatListEntry?) {
         val itemView = holder?.itemView ?: return
-        if (itemView.getTag(mediaContainerId) == HOSTED_ROW) return
+        val key = entry?.key ?: return
+        // The hosted copy lives inside a message row, so it has a parent the recycler does not own
+        val hosted = itemView.parent is LinearLayout
+        val collapse = !hosted && key in inlinedKeys
+
         val params = itemView.layoutParams ?: return
-        if (params.height == 0) return
-        params.height = 0
+        val height = if (collapse) 0 else ViewGroup.LayoutParams.WRAP_CONTENT
+        if (params.height == height) return
+        params.height = height
         itemView.layoutParams = params
     }
 
@@ -636,21 +652,21 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
                 Int::class.javaPrimitiveType!!,
                 ChatListEntry::class.java,
             ) { param ->
-                collapseInlinedRow(param.thisObject as? WidgetChatListItem)
+                collapseInlinedRow(param.thisObject as? WidgetChatListItem, param.args[1] as? ChatListEntry)
             }
             patcher.after<WidgetChatListAdapterItemAttachment>(
                 "onConfigure",
                 Int::class.javaPrimitiveType!!,
                 ChatListEntry::class.java,
             ) { param ->
-                collapseInlinedRow(param.thisObject as? WidgetChatListItem)
+                collapseInlinedRow(param.thisObject as? WidgetChatListItem, param.args[1] as? ChatListEntry)
             }
             patcher.after<WidgetChatListAdapterItemSticker>(
                 "onConfigure",
                 Int::class.javaPrimitiveType!!,
                 ChatListEntry::class.java,
             ) { param ->
-                collapseInlinedRow(param.thisObject as? WidgetChatListItem)
+                collapseInlinedRow(param.thisObject as? WidgetChatListItem, param.args[1] as? ChatListEntry)
             }
         }
 
@@ -816,9 +832,6 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
 
         /** The stock window two messages must fall inside to share a header. */
         const val GROUPING_WINDOW_MS = 0x668a0L
-
-        /** Marks a media row that is hosted inside a message row rather than standing alone. */
-        const val HOSTED_ROW = "bugcord:hosted"
     }
 }
 
