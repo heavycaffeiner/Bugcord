@@ -223,7 +223,8 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
         }
 
         // Rebuild the block's padding span as top-only so the gap above the code survives while the
-        // bottom one goes away. Bullets, headers and changelogs build their own spans and are untouched
+        // bottom one goes away, and collapse the trailing newline's own line height. Bullets,
+        // headers and changelogs build their own padding spans and are left untouched
         runCatching {
             val renderMethod = BlockBackgroundNode::class.java.getDeclaredMethod(
                 "render",
@@ -234,16 +235,28 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
                 override fun afterHookedMethod(param: MethodHookParam) {
                     val builder = param.args[0] as? SpannableStringBuilder ?: return
                     val context = (param.args[1] as? BasicRenderContext)?.context ?: return
-                    val spans = builder.getSpans(0, builder.length, VerticalPaddingSpan::class.java)
-                    val span = spans.lastOrNull() ?: return
+                    val end = builder.length
+                    if (end < 1 || builder[end - 1] != '\n') return
 
+                    // Take the padding span covering this block, not one an earlier node added
+                    val span = builder.getSpans(0, end, VerticalPaddingSpan::class.java)
+                        .lastOrNull { builder.getSpanEnd(it) == end } ?: return
                     val start = builder.getSpanStart(span)
-                    val end = builder.getSpanEnd(span)
-                    val flags = builder.getSpanFlags(span)
-                    if (start < 0 || end < 0) return
+                    if (start < 0) return
 
                     builder.removeSpan(span)
-                    builder.setSpan(VerticalPaddingSpan(dpToPx(context, 4), 0), start, end, flags)
+                    builder.setSpan(
+                        VerticalPaddingSpan(dpToPx(context, 4), 0),
+                        start,
+                        end,
+                        SPAN_FLAGS,
+                    )
+
+                    // StaticLayout gives the trailing newline its own line, and chooseHeight is
+                    // never called for it, so its height has to be removed through the font itself.
+                    // The newline draws nothing, so scaling it away is invisible, and the background
+                    // span still ends on this line and keeps painting
+                    builder.setSpan(RelativeSizeSpan(0f), end - 1, end, SPAN_FLAGS)
                 }
             })
         }
@@ -294,17 +307,10 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
         val media = mergeableMedia(message)
         val existing = root.findViewById<LinearLayout>(mediaContainerId)
 
-        if (media.isEmpty()) {
-            existing?.apply {
-                removeAllViews()
-                visibility = View.GONE
-            }
-            return false
-        }
-
-        // An image-only message has no text, and the text view goes GONE. ConstraintLayout still
-        // collapses it in place, so anchoring the picture below it reserves an empty strip that
-        // reads as a blank message. Anchor to the header instead and drop the text view's margins
+        // A message with no text still lays out its text view, and ConstraintLayout collapses a
+        // GONE view in place rather than removing it, so its vertical margins keep reserving a
+        // strip that reads as a blank message. This applies to any text-less message, including
+        // bot embeds that render as their own card row, so it has to run before the media guard
         val textId = Utils.getResId("chat_list_adapter_item_text", "id")
         val headerId = Utils.getResId("chat_list_adapter_item_text_header", "id")
         val itemText = root.findViewById<View>(textId)
@@ -318,6 +324,15 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
                 }
             }
         }
+
+        if (media.isEmpty()) {
+            existing?.apply {
+                removeAllViews()
+                visibility = View.GONE
+            }
+            return false
+        }
+
 
         val container = existing ?: createMediaContainer(root) ?: return false
         container.visibility = View.VISIBLE
