@@ -36,6 +36,7 @@ import com.discord.simpleast.core.parser.Parser
 import com.lytefast.flexinput.R
 import com.discord.simpleast.core.parser.Rule
 import com.discord.utilities.spans.BlockBackgroundSpan
+import com.discord.utilities.embed.EmbedResourceUtils
 import com.discord.utilities.spans.VerticalPaddingSpan
 import com.discord.utilities.textprocessing.DiscordParser
 import com.discord.utilities.textprocessing.Rules
@@ -74,6 +75,8 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
             .onFailure { logger.error("Failed to install the markdown parsers", it) }
         runCatching { patchMessageLayout() }
             .onFailure { logger.error("Failed to patch the message layout", it) }
+        runCatching { patchSmallImageScaling() }
+            .onFailure { logger.error("Failed to patch small image scaling", it) }
         runCatching { patchImageLinkSuppression() }
         runCatching { patchCodeBlockPadding() }
     }
@@ -239,6 +242,41 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
         if (itemView.paddingBottom == bottom) return
         itemView.setPadding(itemView.paddingLeft, itemView.paddingTop, itemView.paddingRight, bottom)
     }
+
+    /**
+     * Keeps an image that already fits the viewport at its own size. The stock implementation
+     * upscales anything below half the maximum width, which blows a small picture up to the full
+     * screen width.
+     */
+    private fun patchSmallImageScaling() {
+        runCatching {
+            patcher.after<EmbedResourceUtils>(
+                "calculateScaledSize",
+                Int::class.javaPrimitiveType!!,
+                Int::class.javaPrimitiveType!!,
+                Int::class.javaPrimitiveType!!,
+                Int::class.javaPrimitiveType!!,
+                Resources::class.java,
+                Int::class.javaPrimitiveType!!,
+            ) { param ->
+                val width = param.args[0] as? Int ?: return@after
+                val height = param.args[1] as? Int ?: return@after
+                val maxWidth = param.args[2] as? Int ?: return@after
+                val maxHeight = param.args[3] as? Int ?: return@after
+                val resources = param.args[4] as? Resources ?: return@after
+                if (width <= 0 || height <= 0) return@after
+
+                // Embed dimensions are density independent; convert before comparing to px bounds
+                val density = resources.displayMetrics.density
+                val naturalWidth = (width * density).toInt()
+                val naturalHeight = (height * density).toInt()
+                if (naturalWidth <= maxWidth && naturalHeight <= maxHeight) {
+                    param.result = Pair(naturalWidth, naturalHeight)
+                }
+            }
+        }
+    }
+
     private fun patchImageLinkSuppression() {
         runCatching {
             val urlNodeClass = Class.forName("com.discord.utilities.textprocessing.node.UrlNode")
