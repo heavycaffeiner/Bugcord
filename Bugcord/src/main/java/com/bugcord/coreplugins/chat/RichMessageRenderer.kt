@@ -22,6 +22,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageView
 import android.widget.TextView
+import android.widget.LinearLayout
 import androidx.constraintlayout.widget.ConstraintLayout
 import androidx.core.content.res.ResourcesCompat
 import com.bugcord.Constants
@@ -63,10 +64,13 @@ import com.discord.widgets.chat.list.adapter.WidgetChatListAdapterItemEmbed
 import com.discord.widgets.chat.list.adapter.WidgetChatListAdapterItemAttachment
 import com.discord.widgets.chat.list.adapter.WidgetChatListAdapterItemMessage
 import com.discord.widgets.chat.list.adapter.WidgetChatListAdapterItemSticker
+import com.discord.widgets.chat.list.adapter.WidgetChatListAdapter
+import com.discord.widgets.chat.list.adapter.WidgetChatListItem
 import com.discord.widgets.chat.list.entries.AttachmentEntry
 import com.discord.widgets.chat.list.entries.ChatListEntry
 import com.discord.widgets.chat.list.entries.EmbedEntry
 import com.discord.widgets.chat.list.entries.MessageEntry
+import com.discord.widgets.chat.list.entries.StickerEntry
 import de.robv.android.xposed.XC_MethodHook
 import java.util.regex.Matcher
 import java.util.regex.Pattern
@@ -78,7 +82,8 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
     override val isHidden = true
     override val isRequired = true
 
-
+    /** Identifies the container holding the rows inlined into a message row. */
+    private val mediaContainerId = View.generateViewId()
 
     /**
      * Builders whose code block trailing newline was removed, awaiting a sibling node. Weak and
@@ -248,13 +253,13 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
 
     /**
      * A picture, sticker or embed message is emitted as two entries: a MessageEntry holding the
-     * avatar, username and timestamp, and a separate row holding the media. When the message has no
-     * text the first row still draws a full header, so the screen shows an empty message followed by
-     * the media: two messages worth of height for one message.
+     * avatar, username and timestamp, and a separate row holding the media. With no text the first
+     * row is a bare header, so one message costs two messages worth of height.
      *
-     * The media rows carry no header views of their own, so the header has to stay on the message
-     * row. What goes instead is the gap under it, which is what separates the two rows visually.
-     * The header row is pulled flush against the media so the pair reads as one message.
+     * Draw the media inside the message row instead. The views are produced by the stock holder for
+     * that entry, constructed once per message row and asked to configure itself, so every embed,
+     * attachment and sticker is bound by Discord's own code rather than rebuilt here. The trailing
+     * rows are then dropped, since the message row already shows them.
      */
     private fun patchMessageLayout() {
         patcher.after<WidgetChatListAdapterItemMessage>(
@@ -263,23 +268,132 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
             ChatListEntry::class.java,
         ) { param ->
             val holder = param.thisObject as WidgetChatListAdapterItemMessage
+            val position = param.args[0] as? Int ?: return@after
             val entry = param.args[1] as? MessageEntry ?: return@after
-            val itemView = holder.itemView ?: return@after
-            runCatching { applyRowGap(itemView, entry) }
-                .onFailure { logger.error("Failed to apply the message row gap", it) }
+            val itemView = holder.itemView as? ConstraintLayout ?: return@after
+            runCatching { inlineMedia(holder, itemView, entry, position) }
+                .onFailure { logger.error("Failed to inline the message media", it) }
         }
     }
 
-    private fun applyRowGap(itemView: View, entry: MessageEntry) {
-        // Rows are recycled, so both branches must set every value they depend on
-        val ownsMediaRows = hasTrailingRows(entry.message)
-        val textless = entry.message.content.isNullOrBlank()
+    /**
+     * Attaches the rows the message owns underneath its text, inside the same row. Returns without
+     * touching the container when the message owns nothing, so a plain text row is untouched.
+     */
+    private fun inlineMedia(
+        holder: WidgetChatListAdapterItemMessage,
+        itemView: ConstraintLayout,
+        entry: MessageEntry,
+        position: Int,
+    ) {
+        val adapter = holder.adapter ?: return
+        val entries = trailingEntries(adapter, entry, position)
+        val container = itemView.findViewById<LinearLayout>(mediaContainerId)
+            ?: if (entries.isEmpty()) return else createMediaContainer(itemView) ?: return
 
-        // A textless media message is only a header, so close the gap to the media under it
-        val bottom = if (ownsMediaRows) 0 else dp(itemView, 4)
-        val top = if (ownsMediaRows && textless) dp(itemView, 6) else dp(itemView, 10)
-        if (itemView.paddingTop == top && itemView.paddingBottom == bottom) return
-        itemView.setPadding(itemView.paddingLeft, top, itemView.paddingRight, bottom)
+        if (entries.isEmpty()) {
+            if (container.childCount > 0) container.removeAllViews()
+            container.visibility = View.GONE
+            return
+        }
+        container.visibility = View.VISIBLE
+
+        // Rebuild whenever the row's contents change identity, so a recycled row can never keep a
+        // holder bound to another message. The keys already carry the entry index and the message id
+        val key = entries.joinToString("|") { it.key }
+        if (container.getTag(mediaContainerId) != key) {
+            container.removeAllViews()
+            entries.forEach { child ->
+                val hosted = hostHolder(child, adapter) ?: return@forEach
+                // Marks this view as the inlined copy, so the collapse hook leaves it visible
+                hosted.itemView.setTag(mediaContainerId, HOSTED_ROW)
+                hosted.itemView.layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                )
+                runCatching { hosted.onConfigure(child.type, child) }
+                    .onFailure { logger.error("Failed to configure an inlined media row", it) }
+            }
+            container.setTag(mediaContainerId, key)
+        }
+    }
+
+    /** The stock holder that draws [entry], or null when the entry is not a media row. */
+    private fun hostHolder(
+        entry: ChatListEntry,
+        adapter: WidgetChatListAdapter,
+    ): WidgetChatListItem? = when (entry) {
+        is EmbedEntry -> WidgetChatListAdapterItemEmbed(adapter)
+        is AttachmentEntry -> WidgetChatListAdapterItemAttachment(adapter)
+        is StickerEntry -> WidgetChatListAdapterItemSticker(adapter)
+        else -> null
+    }
+
+    /**
+     * Collapses a standalone media row to nothing. The message row above it already drew the same
+     * entry, so the row would otherwise be a second copy. Views hosted inside a message row carry a
+     * marker and are left alone, since those are the copies that must stay visible.
+     */
+    private fun collapseInlinedRow(holder: WidgetChatListItem?) {
+        val itemView = holder?.itemView ?: return
+        if (itemView.getTag(mediaContainerId) == HOSTED_ROW) return
+        val params = itemView.layoutParams ?: return
+        if (params.height == 0) return
+        params.height = 0
+        itemView.layoutParams = params
+    }
+
+    /**
+     * The rows this message owns, taken from the list the model already built. The entries are the
+     * real ones the chat list would have shown, so nothing is reconstructed here and any change to
+     * how Discord builds them is picked up for free.
+     */
+    private fun trailingEntries(
+        adapter: WidgetChatListAdapter,
+        entry: MessageEntry,
+        position: Int,
+    ): List<ChatListEntry> {
+        val list = adapter.data?.list ?: return emptyList()
+        val messageId = entry.message.id
+        val owned = ArrayList<ChatListEntry>()
+
+        // The rows a message owns directly follow it, so stop at the first row that is not one
+        for (index in position + 1 until list.size) {
+            val candidate = list[index]
+            val ownerId = when (candidate) {
+                is EmbedEntry -> candidate.message.id
+                is AttachmentEntry -> candidate.message.id
+                is StickerEntry -> candidate.message.id
+                else -> return owned
+            }
+            if (ownerId != messageId) return owned
+            owned += candidate
+        }
+        return owned
+    }
+
+    /**
+     * Hosts the inlined rows, aligned to the chat guideline so the media lines up with the message
+     * text rather than the avatar.
+     */
+    private fun createMediaContainer(root: ConstraintLayout): LinearLayout? {
+        val guidelineId = Utils.getResId("uikit_chat_guideline", "id")
+        val textId = Utils.getResId("chat_list_adapter_item_text", "id")
+        if (guidelineId == 0 || textId == 0) return null
+
+        return LinearLayout(root.context).apply {
+            id = mediaContainerId
+            orientation = LinearLayout.VERTICAL
+            layoutParams = ConstraintLayout.LayoutParams(
+                0,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply {
+                startToStart = guidelineId
+                endToEnd = ConstraintLayout.LayoutParams.PARENT_ID
+                topToBottom = textId
+            }
+            root.addView(this)
+        }
     }
 
     /**
@@ -514,6 +628,32 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
             }
         }
 
+        // The message row draws these rows itself now, so the standalone copies collapse to nothing.
+        // They stay in the list, because that list is where the message row reads them from
+        runCatching {
+            patcher.after<WidgetChatListAdapterItemEmbed>(
+                "onConfigure",
+                Int::class.javaPrimitiveType!!,
+                ChatListEntry::class.java,
+            ) { param ->
+                collapseInlinedRow(param.thisObject as? WidgetChatListItem)
+            }
+            patcher.after<WidgetChatListAdapterItemAttachment>(
+                "onConfigure",
+                Int::class.javaPrimitiveType!!,
+                ChatListEntry::class.java,
+            ) { param ->
+                collapseInlinedRow(param.thisObject as? WidgetChatListItem)
+            }
+            patcher.after<WidgetChatListAdapterItemSticker>(
+                "onConfigure",
+                Int::class.javaPrimitiveType!!,
+                ChatListEntry::class.java,
+            ) { param ->
+                collapseInlinedRow(param.thisObject as? WidgetChatListItem)
+            }
+        }
+
         // Always allow media rendering in embeds
         runCatching {
             patcher.before<WidgetChatListAdapterItemEmbed>("shouldRenderMedia") { param ->
@@ -676,6 +816,9 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
 
         /** The stock window two messages must fall inside to share a header. */
         const val GROUPING_WINDOW_MS = 0x668a0L
+
+        /** Marks a media row that is hosted inside a message row rather than standing alone. */
+        const val HOSTED_ROW = "bugcord:hosted"
     }
 }
 
