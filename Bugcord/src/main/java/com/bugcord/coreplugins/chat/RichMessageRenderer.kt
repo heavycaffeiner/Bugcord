@@ -29,6 +29,7 @@ import com.bugcord.Constants
 import com.bugcord.Utils
 import com.bugcord.entities.CorePlugin
 import com.bugcord.patcher.Patcher
+import com.bugcord.patcher.PreHook
 import com.bugcord.patcher.after
 import com.bugcord.patcher.before
 import com.bugcord.patcher.instead
@@ -57,6 +58,7 @@ import com.discord.utilities.spans.BlockBackgroundSpan
 import com.discord.utilities.spans.VerticalPaddingSpan
 import com.discord.utilities.textprocessing.DiscordParser
 import com.discord.utilities.textprocessing.Rules
+import com.discord.utilities.textprocessing.node.BlockBackgroundNode
 import com.discord.utilities.textprocessing.node.BasicRenderContext
 import com.discord.utilities.textprocessing.node.BulletListNode
 import com.discord.widgets.chat.list.InlineMediaView
@@ -95,7 +97,7 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
         runCatching { patchEmbedRendering() }
             .onFailure { logger.error("Failed to patch embed rendering", it) }
         runCatching { patchImageLinkSuppression() }
-        runCatching { patchCodeBlockBottomPadding() }
+        runCatching { patchCodeBlockPadding() }
     }
 
     /**
@@ -187,42 +189,61 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
     }
 
     /**
-     * BlockBackgroundNode.render appends a trailing newline and then spans the background and the
-     * vertical padding over the whole builder. StaticLayout turns that newline into its own empty
-     * line, and because BlockBackgroundSpan paints whenever getSpanEnd equals the line end, the
-     * background stretches over a full extra line plus its 5dp padding.
+     * BlockBackgroundNode gives a code block 5dp of padding on both sides and appends a trailing
+     * newline, which StaticLayout lays out as an extra empty line. BlockBackgroundSpan repaints on
+     * every line whose end matches the span end, so the background is stretched down over that
+     * empty line and the block gains a full line of dead space underneath.
      *
-     * Collapsing the span off the newline drops the background entirely, since the paint condition
-     * then fails on the last code line. Instead the empty trailing line itself is given zero height.
+     * The empty line's own draw call is skipped so the background stops at the last line of code,
+     * and the padding span is rebuilt as top-only.
      */
-    private fun patchCodeBlockBottomPadding() {
+    private fun patchCodeBlockPadding() {
         runCatching {
-            val chooseHeight = VerticalPaddingSpan::class.java.getDeclaredMethod(
-                "chooseHeight",
+            val drawBackground = BlockBackgroundSpan::class.java.getDeclaredMethod(
+                "drawBackground",
+                Canvas::class.java,
+                Paint::class.java,
+                Int::class.javaPrimitiveType!!,
+                Int::class.javaPrimitiveType!!,
+                Int::class.javaPrimitiveType!!,
+                Int::class.javaPrimitiveType!!,
+                Int::class.javaPrimitiveType!!,
                 CharSequence::class.java,
                 Int::class.javaPrimitiveType!!,
                 Int::class.javaPrimitiveType!!,
                 Int::class.javaPrimitiveType!!,
-                Int::class.javaPrimitiveType!!,
-                Paint.FontMetricsInt::class.java,
             )
-            Patcher.addPatch(chooseHeight, object : XC_MethodHook() {
-                override fun afterHookedMethod(param: MethodHookParam) {
-                    val span = param.thisObject as? VerticalPaddingSpan ?: return
-                    val text = param.args[0] as? Spanned ?: return
-                    val start = param.args[1] as? Int ?: return
-                    val end = param.args[2] as? Int ?: return
-                    val fm = param.args[5] as? Paint.FontMetricsInt ?: return
-                    if (text.getSpanEnd(span) != end) return
+            Patcher.addPatch(drawBackground, PreHook { param ->
+                val start = param.args[8] as? Int ?: return@PreHook
+                val end = param.args[9] as? Int ?: return@PreHook
+                // A zero-length line is the trailing newline, never a real line of code. Skipping
+                // its draw leaves the rect at the previous line's bottom, so the block hugs the code
+                if (start >= end) param.result = null
+            })
+        }
 
-                    // The trailing newline forms a zero-length line; that is the one to flatten.
-                    // A real code line keeps its height, otherwise the last row of code is squashed.
-                    if (start >= end) {
-                        fm.top = 0
-                        fm.ascent = 0
-                        fm.descent = 0
-                        fm.bottom = 0
-                    }
+        // Rebuild the block's padding span as top-only so the gap above the code survives while the
+        // bottom one goes away. Bullets, headers and changelogs build their own spans and are untouched
+        runCatching {
+            val renderMethod = BlockBackgroundNode::class.java.getDeclaredMethod(
+                "render",
+                SpannableStringBuilder::class.java,
+                BasicRenderContext::class.java,
+            )
+            Patcher.addPatch(renderMethod, object : XC_MethodHook() {
+                override fun afterHookedMethod(param: MethodHookParam) {
+                    val builder = param.args[0] as? SpannableStringBuilder ?: return
+                    val context = (param.args[1] as? BasicRenderContext)?.context ?: return
+                    val spans = builder.getSpans(0, builder.length, VerticalPaddingSpan::class.java)
+                    val span = spans.lastOrNull() ?: return
+
+                    val start = builder.getSpanStart(span)
+                    val end = builder.getSpanEnd(span)
+                    val flags = builder.getSpanFlags(span)
+                    if (start < 0 || end < 0) return
+
+                    builder.removeSpan(span)
+                    builder.setSpan(VerticalPaddingSpan(dpToPx(context, 4), 0), start, end, flags)
                 }
             })
         }
@@ -295,6 +316,14 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
 
         val container = existing ?: createMediaContainer(root) ?: return false
         container.visibility = View.VISIBLE
+        // The container carries the gap above the picture, so stacked images stay tight together
+        (container.layoutParams as? ViewGroup.MarginLayoutParams)?.let { lp ->
+            val lead = dp(root, 4)
+            if (lp.topMargin != lead) {
+                lp.topMargin = lead
+                container.layoutParams = lp
+            }
+        }
         while (container.childCount > media.size) container.removeViewAt(container.childCount - 1)
         media.forEachIndexed { index, item ->
             val view = container.getChildAt(index) as? InlineMediaView ?: InlineMediaView(root.context).also {
@@ -331,7 +360,7 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
                 topToBottom = textId
                 horizontalBias = 0f
                 marginEnd = dp(root, 12)
-                topMargin = 0
+                topMargin = dp(root, 4)
             }
             root.addView(this)
         }
@@ -429,7 +458,8 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
     private fun applySpacing(itemView: View, entry: MessageEntry, hasInlineMedia: Boolean, position: Int) {
         val message = entry.message
         val isLastMessage = position <= 1
-        val top = if (entry.isMinimal()) dp(itemView, 1) else dp(itemView, 2)
+        // A non-minimal row opens a new author group and gets the wider lead; continuations stay tight
+        val top = if (entry.isMinimal()) dp(itemView, 1) else dp(itemView, 4)
         val bottom = if (isLastMessage || hasTrailingRows(message) || hasInlineMedia) 0 else dp(itemView, 1)
         itemView.setPadding(itemView.paddingLeft, top, itemView.paddingRight, bottom)
     }
@@ -629,8 +659,8 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
                 imageView?.adjustViewBounds = true
 
                 // The card, the image container and the inline media each carry their own vertical
-                // margins in the layout, and they stack on top of each other above the picture
-                zeroVerticalMargins(cardView, imageContainer, mediaView, imageView)
+                // margins that stack above the picture. Collapse them to a single 4dp lead
+                setMediaMargins(topDp = 4, views = arrayOf(cardView, imageContainer, mediaView, imageView))
                 contentView?.let {
                     it.setPadding(it.paddingLeft, 0, it.paddingRight, dp(it, 4))
                 }
@@ -686,9 +716,13 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
             zeroVerticalMargins(holder.itemView)
             if (fAttachBinding != null) {
                 val b = fAttachBinding.get(holder) ?: return@after
-                zeroVerticalMargins(
-                    getBoundField(b, "d") as? View,
-                    getBoundField(b, "h") as? View,
+                // Same stacking as the embed row: one 4dp lead, nothing underneath
+                setMediaMargins(
+                    topDp = 4,
+                    views = arrayOf(
+                        getBoundField(b, "h") as? View,
+                        getBoundField(b, "d") as? View,
+                    ),
                 )
             }
         }
@@ -707,17 +741,30 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
         }
     }
 
-    /** Drops the stacked vertical margins the chat row layouts put around media. */
-    private fun zeroVerticalMargins(vararg views: View?) {
+    /**
+     * Collapses the stacked vertical margins the chat row layouts put around media down to a single
+     * gap. Only the first visible view gets the lead so the gaps do not add up again.
+     */
+    private fun setMediaMargins(topDp: Int, views: Array<out View?>) {
+        var leadApplied = false
         views.forEach { view ->
             if (view == null) return@forEach
             val params = view.layoutParams as? ViewGroup.MarginLayoutParams ?: return@forEach
-            if (params.topMargin == 0 && params.bottomMargin == 0) return@forEach
-            params.topMargin = 0
+            val top = if (!leadApplied && view.visibility == View.VISIBLE) {
+                leadApplied = true
+                dp(view, topDp)
+            } else {
+                0
+            }
+            if (params.topMargin == top && params.bottomMargin == 0) return@forEach
+            params.topMargin = top
             params.bottomMargin = 0
             view.layoutParams = params
         }
     }
+
+    private fun zeroVerticalMargins(vararg views: View?) =
+        setMediaMargins(topDp = 0, views = views)
 
     private fun getBoundField(target: Any, name: String): Any? = runCatching {
         target.javaClass.getDeclaredField(name).apply { isAccessible = true }.get(target)
