@@ -246,6 +246,15 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
         }
     }
 
+    /**
+     * A message with no text of its own, a bot embed or a bare picture, still reserves a text line
+     * under the username, so the card below reads as a second message. The stock row sets the text
+     * view GONE when the parsed content is empty, but its sibling views are chained beneath it and
+     * the reply spline keeps the chain's height, so the row stays a full line tall.
+     *
+     * Collapse that line by zeroing the GONE text view's margins. Everything else about the row,
+     * including the layout's own 10dp top padding, is left exactly as the stock layout set it.
+     */
     private fun patchMessageLayout() {
         patcher.after<WidgetChatListAdapterItemMessage>(
             "onConfigure",
@@ -253,11 +262,28 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
             ChatListEntry::class.java,
         ) { param ->
             val holder = param.thisObject as WidgetChatListAdapterItemMessage
-            val entry = param.args[1] as? MessageEntry ?: return@after
+            param.args[1] as? MessageEntry ?: return@after
             val itemView = holder.itemView as? ConstraintLayout ?: return@after
-            runCatching { applySpacing(itemView, entry) }
-                .onFailure { logger.error("Failed to apply message spacing", it) }
+            runCatching { collapseEmptyTextLine(itemView) }
+                .onFailure { logger.error("Failed to collapse the empty text line", it) }
         }
+    }
+
+    /** Drops the vertical margins of the row's text view while it is hidden. */
+    private fun collapseEmptyTextLine(itemView: ConstraintLayout) {
+        val textId = Utils.getResId("chat_list_adapter_item_text", "id")
+        if (textId == 0) return
+        val textView = itemView.findViewById<TextView>(textId) ?: return
+        val params = textView.layoutParams as? ViewGroup.MarginLayoutParams ?: return
+
+        // Rows are recycled, so the margins must come back when the view is used again
+        val hidden = textView.visibility == View.GONE
+        val top = if (hidden) 0 else dp(itemView, 2)
+        val bottom = if (hidden) 0 else dp(itemView, 2)
+        if (params.topMargin == top && params.bottomMargin == bottom) return
+        params.topMargin = top
+        params.bottomMargin = bottom
+        textView.layoutParams = params
     }
 
     /**
@@ -363,40 +389,6 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
         return false
     }
 
-    /**
-     * Spacing must not depend on the row's position. RecyclerView does not rebind a row when other
-     * rows are inserted above it, so a position derived padding stays frozen at its bind time value
-     * and the gap silently goes stale. The 16dp spacer entry already separates the newest row from
-     * the input box, so no position special case is needed here.
-     */
-    private fun applySpacing(itemView: View, entry: MessageEntry) {
-        val message = entry.message
-        val isGroupStart = !entry.isMinimal()
-        // A non-minimal row opens a new author group and gets the wider lead; continuations stay tight
-        val top = if (isGroupStart) dp(itemView, 4) else dp(itemView, 1)
-        // Media, embed and sticker rows sit directly under the row and carry the gap themselves
-        val bottom = when {
-            hasTrailingRows(message) -> 0
-            isGroupStart -> dp(itemView, 4)
-            else -> dp(itemView, 1)
-        }
-        itemView.setPadding(itemView.paddingLeft, top, itemView.paddingRight, bottom)
-
-        // A picture-only message still lays out its text view. ConstraintLayout collapses a GONE
-        // view in place rather than removing it, so its vertical margins keep reserving a blank
-        // line under the username and the picture below reads as a separate message
-        val textId = Utils.getResId("chat_list_adapter_item_text", "id")
-        if (textId == 0) return
-        val textView = itemView.findViewById<TextView>(textId) ?: return
-        if (textView.visibility != View.GONE) return
-        (textView.layoutParams as? ViewGroup.MarginLayoutParams)?.let { lp ->
-            if (lp.topMargin != 0 || lp.bottomMargin != 0) {
-                lp.topMargin = 0
-                lp.bottomMargin = 0
-                textView.layoutParams = lp
-            }
-        }
-    }
 
     private fun patchImageLinkSuppression() {
         runCatching {
@@ -660,10 +652,6 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
     private fun getBoundField(target: Any, name: String): Any? = runCatching {
         target.javaClass.getDeclaredField(name).apply { isAccessible = true }.get(target)
     }.getOrNull()
-
-    private fun MessageEntry.isMinimal(): Boolean = runCatching {
-        javaClass.getDeclaredField("isMinimal").apply { isAccessible = true }.getBoolean(this)
-    }.getOrDefault(false)
 
     private fun dp(view: View, value: Int): Int = (value * view.resources.displayMetrics.density).toInt()
 
