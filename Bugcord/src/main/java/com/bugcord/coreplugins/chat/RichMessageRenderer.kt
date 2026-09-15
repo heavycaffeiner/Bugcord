@@ -60,7 +60,6 @@ import com.discord.utilities.textprocessing.node.BlockBackgroundNode
 import com.discord.utilities.textprocessing.node.BasicRenderContext
 import com.discord.utilities.textprocessing.node.BulletListNode
 import com.discord.widgets.chat.list.adapter.WidgetChatListAdapterItemEmbed
-import com.discord.widgets.chat.list.adapter.WidgetChatListItem
 import com.discord.widgets.chat.list.adapter.WidgetChatListAdapterItemAttachment
 import com.discord.widgets.chat.list.adapter.WidgetChatListAdapterItemMessage
 import com.discord.widgets.chat.list.adapter.WidgetChatListAdapterItemSticker
@@ -101,6 +100,8 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
             .onFailure { logger.error("Failed to patch the message layout", it) }
         runCatching { patchMediaRowIdentity() }
             .onFailure { logger.error("Failed to patch media row identity", it) }
+        runCatching { patchMediaMessageGrouping() }
+            .onFailure { logger.error("Failed to patch media message grouping", it) }
         runCatching { patchEmbedRendering() }
             .onFailure { logger.error("Failed to patch embed rendering", it) }
         runCatching { patchImageLinkSuppression() }
@@ -197,14 +198,13 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
 
     /**
      * BlockBackgroundNode appends a trailing newline, which StaticLayout lays out as a second,
-     * empty line. Measured on device: "code\n" is 2 lines totalling 101px, against 54px once the
-     * newline is gone. No span can shrink that line. AbsoluteSizeSpan and RelativeSizeSpan over the
-     * newline leave it at 48px either way, because the line covers a zero-length range, and
-     * LineHeightSpan.chooseHeight is never invoked for it. Only deleting the newline collapses it.
+     * empty line under the code. Measured on device: "code\n" is 2 lines totalling 101px against
+     * 54px once the newline is gone. No span can shrink that line, because it covers a zero-length
+     * range and LineHeightSpan.chooseHeight is never invoked for it.
      *
-     * Deleting it outright was tried before and glued the next node onto the last line of code,
-     * since siblings append after this returns. So the newline is removed here and restored lazily
-     * if anything is appended afterwards, which also stops it being the trailing character.
+     * Deleting it outright glued the next node onto the last line of code, since siblings append
+     * after this returns, so it is restored lazily if anything follows. The block's own padding is
+     * left as the theme set it.
      */
     private fun patchCodeBlockPadding() {
         runCatching {
@@ -216,19 +216,9 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
             Patcher.addPatch(renderMethod, object : XC_MethodHook() {
                 override fun afterHookedMethod(param: MethodHookParam) {
                     val builder = param.args[0] as? SpannableStringBuilder ?: return
-                    val context = (param.args[1] as? BasicRenderContext)?.context ?: return
                     val end = builder.length
                     if (end < 1 || builder[end - 1] != '\n') return
 
-                    // Match the padding span this block just added, not one from an earlier node
-                    val span = builder.getSpans(0, end, VerticalPaddingSpan::class.java)
-                        .lastOrNull { builder.getSpanEnd(it) == end } ?: return
-                    val start = builder.getSpanStart(span)
-                    if (start < 0 || start >= end) return
-
-                    // Keep the lead above the code, drop the padding under it
-                    builder.removeSpan(span)
-                    builder.setSpan(VerticalPaddingSpan(dpToPx(context, 4), 0), start, end, SPAN_FLAGS)
 
                     // The spans stay anchored to the code, and the background keeps painting
                     // because its end still lands on the last line of code once this is gone
@@ -268,28 +258,68 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
             runCatching { applySpacing(itemView, entry) }
                 .onFailure { logger.error("Failed to apply message spacing", it) }
         }
-
-        // The 24dp typing indicator spacer sits at position 0 in the reverse layout even when nobody
-        // is typing, creating a large empty gap above the chat input box. Shrink it down.
-        runCatching {
-            patcher.after<WidgetChatListItem>(
-                "onConfigure",
-                Int::class.javaPrimitiveType!!,
-                ChatListEntry::class.java,
-            ) { param ->
-                val holder = param.thisObject as WidgetChatListItem
-                val entry = param.args[1] as? ChatListEntry ?: return@after
-                if (entry.javaClass.simpleName == "SpacerEntry") {
-                    val lp = holder.itemView.layoutParams ?: return@after
-                    val target = dp(holder.itemView, 16)
-                    if (lp.height != target) {
-                        lp.height = target
-                        holder.itemView.layoutParams = lp
-                    }
-                }
-            }
-        }
     }
+
+    /**
+     * A message carrying media renders as two messages: the picture ends up under a second avatar
+     * and username instead of joining the one above it.
+     *
+     * shouldConcatMessage decides whether a message keeps the previous message's header, and it
+     * refuses in two ways once media is involved. It requires the last row added to be a message,
+     * reactions or embed row, so a trailing AttachmentEntry or StickerEntry ends the group, and it
+     * rejects the previous message outright when it hasAttachments or hasEmbeds. Media therefore
+     * always breaks the group, even though the rows belong to the message above them.
+     *
+     * Author, timestamp window, mention, thread, system message and concat count checks are all
+     * left to run. Only the media rejection is lifted, which is what the desktop client does.
+     */
+    private fun patchMediaMessageGrouping() {
+        runCatching {
+            val companion = Class.forName(
+                "com.discord.widgets.chat.list.model.WidgetChatListModelMessages\$Companion"
+            )
+            val itemsClass = Class.forName(
+                "com.discord.widgets.chat.list.model.WidgetChatListModelMessages\$Items"
+            )
+            val shouldConcat = companion.getDeclaredMethod(
+                "shouldConcatMessage",
+                itemsClass,
+                Message::class.java,
+                Message::class.java,
+            ).apply { isAccessible = true }
+
+            Patcher.addPatch(shouldConcat, object : XC_MethodHook() {
+                override fun afterHookedMethod(param: MethodHookParam) {
+                    if (param.result == true) return
+                    val message = param.args[1] as? Message ?: return
+                    val previous = param.args[2] as? Message ?: return
+                    // Only the media rejection is lifted; every other rule still decides
+                    if (!hasTrailingRows(previous)) return
+                    param.result = groupsWithPrevious(message, previous)
+                }
+            })
+        }.onFailure { logger.error("Failed to patch media message grouping", it) }
+    }
+
+    /**
+     * The concat rules that still apply once the media rejection is lifted, mirroring the checks
+     * the stock implementation runs for a text message.
+     */
+    private fun groupsWithPrevious(message: Message, previous: Message): Boolean = runCatching {
+        if (previous.isSystemMessage() || message.hasThread() || previous.hasThread()) return false
+        val type = message.type ?: 0
+        if (type != 0 && type != -1) return false
+
+        val author = message.author?.id ?: return false
+        if (previous.author?.id != author) return false
+        if (message.isWebhook() && previous.author?.username != message.author?.username) return false
+        if (!message.mentions.isNullOrEmpty()) return false
+
+        // The stock window between two grouped messages
+        val sent = message.timestamp?.g() ?: 0
+        val previousSent = previous.timestamp?.g() ?: 0
+        sent - previousSent < GROUPING_WINDOW_MS
+    }.getOrDefault(false)
 
     /**
      * Media rows are laid out by the stock adapter. The only thing wrong with them is identity:
@@ -646,6 +676,9 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
 
     private companion object {
         const val SPAN_FLAGS = Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+
+        /** The stock window two messages must fall inside to share a header. */
+        const val GROUPING_WINDOW_MS = 0x668a0L
     }
 }
 
