@@ -302,9 +302,14 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
             return false
         }
 
+        // An image-only message has no text, and the text view goes GONE. ConstraintLayout still
+        // collapses it in place, so anchoring the picture below it reserves an empty strip that
+        // reads as a blank message. Anchor to the header instead and drop the text view's margins
         val textId = Utils.getResId("chat_list_adapter_item_text", "id")
+        val headerId = Utils.getResId("chat_list_adapter_item_text_header", "id")
         val itemText = root.findViewById<View>(textId)
-        if (itemText != null && (itemText.visibility == View.GONE || message.content.isNullOrBlank())) {
+        val hasText = !message.content.isNullOrBlank()
+        if (itemText != null && !hasText) {
             (itemText.layoutParams as? ViewGroup.MarginLayoutParams)?.let { lp ->
                 if (lp.topMargin != 0 || lp.bottomMargin != 0) {
                     lp.topMargin = 0
@@ -316,10 +321,15 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
 
         val container = existing ?: createMediaContainer(root) ?: return false
         container.visibility = View.VISIBLE
-        // The container carries the gap above the picture, so stacked images stay tight together
-        (container.layoutParams as? ViewGroup.MarginLayoutParams)?.let { lp ->
+        (container.layoutParams as? ConstraintLayout.LayoutParams)?.let { lp ->
+            // Skip the collapsed text view entirely when the message is image-only. The minimal
+            // row has no header, so fall back to the text view and rely on its cleared margins
+            val hasHeader = headerId != 0 && root.findViewById<View>(headerId) != null
+            val anchor = if (!hasText && hasHeader) headerId else textId
+            // The container carries the gap above the picture, so stacked images stay tight
             val lead = dp(root, 4)
-            if (lp.topMargin != lead) {
+            if (lp.topToBottom != anchor || lp.topMargin != lead) {
+                lp.topToBottom = anchor
                 lp.topMargin = lead
                 container.layoutParams = lp
             }
