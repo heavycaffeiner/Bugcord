@@ -21,7 +21,6 @@ import android.text.style.RelativeSizeSpan
 import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageView
-import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.constraintlayout.widget.ConstraintLayout
 import androidx.core.content.res.ResourcesCompat
@@ -41,8 +40,6 @@ import com.bugcord.wrappers.messages.AttachmentWrapper.Companion.type
 import com.bugcord.wrappers.messages.AttachmentWrapper.Companion.url
 import com.bugcord.wrappers.messages.AttachmentWrapper.Companion.width
 import com.discord.api.channel.Channel
-import com.discord.api.message.attachment.MessageAttachment
-import com.discord.api.message.attachment.MessageAttachmentType
 import com.discord.api.message.embed.MessageEmbed
 import com.discord.embed.RenderableEmbedMedia
 import com.discord.models.member.GuildMember
@@ -54,7 +51,6 @@ import com.discord.utilities.color.ColorCompat
 import com.lytefast.flexinput.R
 import com.discord.simpleast.core.parser.Rule
 import com.discord.stores.StoreMessageState
-import com.discord.stores.StoreStream
 import com.discord.utilities.embed.EmbedResourceUtils
 import com.discord.utilities.spans.BlockBackgroundSpan
 import com.discord.utilities.spans.VerticalPaddingSpan
@@ -63,8 +59,6 @@ import com.discord.utilities.textprocessing.Rules
 import com.discord.utilities.textprocessing.node.BlockBackgroundNode
 import com.discord.utilities.textprocessing.node.BasicRenderContext
 import com.discord.utilities.textprocessing.node.BulletListNode
-import com.discord.widgets.chat.list.InlineMediaView
-import com.discord.widgets.chat.list.adapter.WidgetChatListAdapter
 import com.discord.widgets.chat.list.adapter.WidgetChatListAdapterItemEmbed
 import com.discord.widgets.chat.list.adapter.WidgetChatListItem
 import com.discord.widgets.chat.list.adapter.WidgetChatListAdapterItemAttachment
@@ -74,7 +68,6 @@ import com.discord.widgets.chat.list.entries.AttachmentEntry
 import com.discord.widgets.chat.list.entries.ChatListEntry
 import com.discord.widgets.chat.list.entries.EmbedEntry
 import com.discord.widgets.chat.list.entries.MessageEntry
-import com.discord.widgets.media.WidgetMedia
 import de.robv.android.xposed.XC_MethodHook
 import java.util.regex.Matcher
 import java.util.regex.Pattern
@@ -86,7 +79,6 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
     override val isHidden = true
     override val isRequired = true
 
-    private val mediaContainerId = View.generateViewId()
 
 
     /**
@@ -107,6 +99,8 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
             .onFailure { logger.error("Failed to install the markdown parsers", it) }
         runCatching { patchMessageLayout() }
             .onFailure { logger.error("Failed to patch the message layout", it) }
+        runCatching { patchMediaRowIdentity() }
+            .onFailure { logger.error("Failed to patch media row identity", it) }
         runCatching { patchEmbedRendering() }
             .onFailure { logger.error("Failed to patch embed rendering", it) }
         runCatching { patchImageLinkSuppression() }
@@ -271,13 +265,7 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
             val holder = param.thisObject as WidgetChatListAdapterItemMessage
             val entry = param.args[1] as? MessageEntry ?: return@after
             val itemView = holder.itemView as? ConstraintLayout ?: return@after
-
-            // A throw here would abort the row mid-render and leave the picture unattached, so
-            // keep media and spacing independent
-            val hasInlineMedia = runCatching { renderInlineMedia(itemView, entry.message) }
-                .onFailure { logger.error("Failed to render inline media", it) }
-                .getOrDefault(false)
-            runCatching { applySpacing(itemView, entry, hasInlineMedia) }
+            runCatching { applySpacing(itemView, entry) }
                 .onFailure { logger.error("Failed to apply message spacing", it) }
         }
 
@@ -301,269 +289,41 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
                 }
             }
         }
+    }
 
-        // A recycled row keeps the media container we attached to it, and onConfigure only runs
-        // for rows the adapter actually rebinds. Switching channels could therefore leave the
-        // previous channel's picture on screen. Drop every container when the data set is swapped
+    /**
+     * Media rows are laid out by the stock adapter. The only thing wrong with them is identity:
+     * DiffUtil decides whether two rows are the same item by comparing getKey(), and EmbedEntry and
+     * AttachmentEntry build that key from the type and the message id alone. Two pictures on one
+     * message therefore share a key, so the adapter reuses an already bound holder for a different
+     * row and a picture surfaces under the wrong message. StickerEntry does not have this problem
+     * because it folds the sticker id into its key, which is the shape restored here.
+     *
+     * Fixing the key is enough on its own. Drawing the pictures by hand, dropping the stock rows and
+     * rewriting their margins was what made images appear in the wrong place to begin with.
+     */
+    private fun patchMediaRowIdentity() {
         runCatching {
-            val dataClass = Class.forName("com.discord.widgets.chat.list.adapter.WidgetChatListAdapter\$Data")
-            val setData = WidgetChatListAdapter::class.java.getDeclaredMethod("setData", dataClass)
-            Patcher.addPatch(setData, PreHook { param ->
-                val adapter = param.thisObject as? WidgetChatListAdapter ?: return@PreHook
-                val recycler = adapter.recycler ?: return@PreHook
-                for (i in 0 until recycler.childCount) {
-                    val row = recycler.getChildAt(i) as? ViewGroup ?: continue
-                    val container = row.findViewById<LinearLayout>(mediaContainerId) ?: continue
-                    container.removeAllViews()
-                    container.visibility = View.GONE
-                    container.tag = null
+            val embedKey = EmbedEntry::class.java.getDeclaredMethod("getKey")
+            Patcher.addPatch(embedKey, object : XC_MethodHook() {
+                override fun afterHookedMethod(param: MethodHookParam) {
+                    val entry = param.thisObject as? EmbedEntry ?: return
+                    param.result = "${param.result}|${entry.embedIndex}"
                 }
             })
-        }
-    }
-    /**
-     * Draws image and video media inside the message row itself so a media message renders as one
-     * message instead of an empty header row followed by a separate media row.
-     * Returns true when at least one media view is attached.
-     */
-    private fun renderInlineMedia(root: ConstraintLayout, message: Message): Boolean {
-        val media = mergeableMedia(message)
-        val existing = root.findViewById<LinearLayout>(mediaContainerId)
+        }.onFailure { logger.error("Failed to patch embed row identity", it) }
 
-        // A message with no text still lays out its text view, and ConstraintLayout collapses a
-        // GONE view in place rather than removing it, so its vertical margins keep reserving a
-        // strip that reads as a blank message. This applies to any text-less message, including
-        // bot embeds that render as their own card row, so it has to run before the media guard
-        val textId = Utils.getResId("chat_list_adapter_item_text", "id")
-        val headerId = Utils.getResId("chat_list_adapter_item_text_header", "id")
-        val itemText = root.findViewById<View>(textId)
-        val hasText = !message.content.isNullOrBlank()
-        if (itemText != null && !hasText) {
-            (itemText.layoutParams as? ViewGroup.MarginLayoutParams)?.let { lp ->
-                if (lp.topMargin != 0 || lp.bottomMargin != 0) {
-                    lp.topMargin = 0
-                    lp.bottomMargin = 0
-                    itemText.layoutParams = lp
+        runCatching {
+            val attachmentKey = AttachmentEntry::class.java.getDeclaredMethod("getKey")
+            Patcher.addPatch(attachmentKey, object : XC_MethodHook() {
+                override fun afterHookedMethod(param: MethodHookParam) {
+                    val entry = param.thisObject as? AttachmentEntry ?: return
+                    param.result = "${param.result}|${entry.embedIndex}"
                 }
-            }
-        }
-
-        if (media.isEmpty()) {
-            existing?.apply {
-                removeAllViews()
-                visibility = View.GONE
-            }
-            return false
-        }
-
-
-        val container = existing ?: createMediaContainer(root) ?: return false
-        container.visibility = View.VISIBLE
-        (container.layoutParams as? ConstraintLayout.LayoutParams)?.let { lp ->
-            // Skip the collapsed text view entirely when the message is image-only. The minimal
-            // row has no header, so fall back to the text view and rely on its cleared margins
-            val hasHeader = headerId != 0 && root.findViewById<View>(headerId) != null
-            val anchor = if (!hasText && hasHeader) headerId else textId
-            // The container carries the gap above the picture, so stacked images stay tight
-            val lead = dp(root, 4)
-            if (lp.topToBottom != anchor || lp.topMargin != lead) {
-                lp.topToBottom = anchor
-                lp.topMargin = lead
-                container.layoutParams = lp
-            }
-        }
-        // Rows are recycled, and a reused InlineMediaView keeps showing its previous picture until
-        // the new load lands. Identify each view by the media it draws rather than by the message:
-        // the stock EmbedEntry and AttachmentEntry keys are only type plus message id, so two
-        // pictures on one message share a key and DiffUtil hands a bound holder to the wrong row.
-        // StickerEntry avoids this by folding the sticker id in, which is the shape copied here
-        val messageKey = message.id
-        if (container.tag != messageKey) {
-            container.removeAllViews()
-            container.tag = messageKey
-        }
-        while (container.childCount > media.size) container.removeViewAt(container.childCount - 1)
-
-        media.forEachIndexed { index, item ->
-            val key = "$messageKey#$index#${mediaIdentity(item)}"
-            var view = container.getChildAt(index) as? InlineMediaView
-
-            // A view holding different media must go, not be rebound, otherwise its old bitmap
-            // stays on screen for the whole load
-            if (view != null && view.tag != key) {
-                container.removeViewAt(index)
-                view = null
-            }
-            if (view == null) {
-                view = InlineMediaView(root.context).also {
-                    it.radius = dp(root, 8).toFloat()
-                    it.cardElevation = 0f
-                    container.addView(
-                        it,
-                        index,
-                        LinearLayout.LayoutParams(
-                            ViewGroup.LayoutParams.WRAP_CONTENT,
-                            ViewGroup.LayoutParams.WRAP_CONTENT,
-                        ).apply { topMargin = 0 },
-                    )
-                }
-            }
-
-            // Reserve the final size up front and keep the placeholder tint behind it, so the row
-            // holds its space while loading instead of collapsing and then jumping
-            val (reservedWidth, reservedHeight) = reservedSize(view, item)
-            view.setCardBackgroundColor(ColorCompat.getThemedColor(view.context, R.b.colorBackgroundSecondary))
-            (view.layoutParams as? LinearLayout.LayoutParams)?.let { lp ->
-                if (reservedWidth > 0 && reservedHeight > 0 &&
-                    (lp.width != reservedWidth || lp.height != reservedHeight)
-                ) {
-                    lp.width = reservedWidth
-                    lp.height = reservedHeight
-                    view.layoutParams = lp
-                }
-            }
-
-            if (view.tag != key) {
-                view.tag = key
-                bindMedia(view, item)
-            }
-        }
-        return true
+            })
+        }.onFailure { logger.error("Failed to patch attachment row identity", it) }
     }
 
-    private fun createMediaContainer(root: ConstraintLayout): LinearLayout? {
-        val guidelineId = Utils.getResId("uikit_chat_guideline", "id")
-        val textId = Utils.getResId("chat_list_adapter_item_text", "id")
-        if (guidelineId == 0 || textId == 0) return null
-
-        return LinearLayout(root.context).apply {
-            id = mediaContainerId
-            orientation = LinearLayout.VERTICAL
-            layoutParams = ConstraintLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-            ).apply {
-                startToEnd = guidelineId
-                endToEnd = ConstraintLayout.LayoutParams.PARENT_ID
-                topToBottom = textId
-                horizontalBias = 0f
-                marginEnd = dp(root, 12)
-                topMargin = dp(root, 4)
-            }
-            root.addView(this)
-        }
-    }
-
-    private fun bindMedia(view: InlineMediaView, item: Any) {
-        val autoPlayGifs = runCatching {
-            StoreStream.getUserSettings().getIsAutoPlayGifsEnabled()
-        }.getOrDefault(false)
-
-        when (item) {
-            is MessageAttachment -> {
-                val (width, height) = scaledSize(view, item.width ?: 0, item.height ?: 0)
-                view.updateUIWithAttachment(item, width, height, autoPlayGifs)
-                view.setOnClickListener { WidgetMedia.Companion!!.launch(it.context, item) }
-            }
-            is MessageEmbed -> {
-                val preview = EmbedResourceUtils.INSTANCE.getPreviewImage(item)
-                val (width, height) = scaledSize(view, preview?.b ?: 0, preview?.c ?: 0)
-                view.updateUIWithEmbed(item, width, height, autoPlayGifs)
-                view.setOnClickListener { WidgetMedia.Companion!!.launch(it.context, item) }
-            }
-        }
-    }
-
-
-    /** Identifies the picture a view draws, so a recycled view is never mistaken for a match. */
-    private fun mediaIdentity(item: Any): String = when (item) {
-        is MessageAttachment -> item.url.orEmpty().ifEmpty { item.proxyUrl.orEmpty() }
-        is MessageEmbed -> EmbedResourceUtils.INSTANCE.getPreviewImage(item)?.a.orEmpty()
-        else -> ""
-    }
-    /** The size a media view will settle at, used to hold the space open while it loads. */
-    private fun reservedSize(view: View, item: Any): Pair<Int, Int> = when (item) {
-        is MessageAttachment -> scaledSize(view, item.width ?: 0, item.height ?: 0)
-        is MessageEmbed -> {
-            val preview = EmbedResourceUtils.INSTANCE.getPreviewImage(item)
-            scaledSize(view, preview?.b ?: 0, preview?.c ?: 0)
-        }
-        else -> ViewGroup.LayoutParams.WRAP_CONTENT to ViewGroup.LayoutParams.WRAP_CONTENT
-    }
-
-    /**
-     * Scales only what overflows the viewport. An image narrower than the maximum keeps its own
-     * pixel size, so a small bot embed stays small instead of stretching to the screen width.
-     */
-    private fun scaledSize(view: View, width: Int, height: Int): Pair<Int, Int> {
-        if (width <= 0 || height <= 0) {
-            return ViewGroup.LayoutParams.WRAP_CONTENT to ViewGroup.LayoutParams.WRAP_CONTENT
-        }
-        val utils = EmbedResourceUtils.INSTANCE
-        val density = view.resources.displayMetrics.density
-        val maxWidth = utils.computeMaximumImageWidthPx(view.context)
-        val maxHeight = utils.getMAX_IMAGE_VIEW_HEIGHT_PX()
-
-        // Embed dimensions are in density-independent units; convert before comparing to px bounds
-        val naturalWidth = (width * density).toInt()
-        val naturalHeight = (height * density).toInt()
-        if (naturalWidth <= maxWidth && naturalHeight <= maxHeight) return naturalWidth to naturalHeight
-
-        val scale = minOf(maxWidth.toFloat() / naturalWidth, maxHeight.toFloat() / naturalHeight)
-        return (naturalWidth * scale).toInt() to (naturalHeight * scale).toInt()
-    }
-
-    /** Attachments and embeds that the message row draws itself, in render order. */
-    private fun mergeableMedia(message: Message): List<Any> {
-        val attachments = message.attachments?.filter { isMergeableAttachment(it) }.orEmpty()
-        if (attachments.isEmpty() && message.embeds.isNullOrEmpty()) return attachments
-
-        val shownUrls = HashSet<String>()
-        attachments.forEach {
-            shownUrls.add(it.url)
-            shownUrls.add(it.proxyUrl)
-        }
-
-        val media = ArrayList<Any>(attachments)
-        message.embeds?.forEach { embed ->
-            if (!isMergeableEmbed(embed)) return@forEach
-            val previewUrl = EmbedResourceUtils.INSTANCE.getPreviewImage(embed)?.a
-            if (previewUrl != null && !shownUrls.add(previewUrl)) return@forEach
-            media.add(embed)
-        }
-        return media
-    }
-
-    private fun isMergeableAttachment(attachment: MessageAttachment): Boolean = runCatching {
-        if (!StoreStream.getUserSettings().getIsAttachmentMediaInline()) return@runCatching false
-        // Spoilers keep their own row so the reveal overlay stays intact
-        if (attachment.h()) return@runCatching false
-        val type = attachment.type
-        if (type != MessageAttachmentType.IMAGE && type != MessageAttachmentType.VIDEO) return@runCatching false
-        (attachment.width ?: 0) > 0 && (attachment.height ?: 0) > 0
-    }.getOrDefault(false)
-
-    /**
-     * An embed is drawn inside the message row when it is purely a picture, which covers a bare
-     * image link and a markdown link pointing at an image. Anything carrying its own text stays a
-     * card. isInlineEmbed cannot be used here: the parser hook above forces it false for embeds
-     * with text so they render as cards, so it would reject every picture too.
-     */
-    private fun isMergeableEmbed(embed: MessageEmbed): Boolean = runCatching {
-        val settings = StoreStream.getUserSettings()
-        if (!settings.getIsEmbedMediaInlined() || !settings.getIsRenderEmbedsEnabled()) return@runCatching false
-
-        val wrapper = MessageEmbedWrapper(embed)
-        val carriesText = !wrapper.title.isNullOrBlank() ||
-            !wrapper.description.isNullOrBlank() ||
-            wrapper.author != null ||
-            !wrapper.fields.isNullOrEmpty() ||
-            wrapper.footer != null
-        if (carriesText) return@runCatching false
-
-        val preview = EmbedResourceUtils.INSTANCE.getPreviewImage(embed) ?: return@runCatching false
-        (preview.b ?: 0) > 0 && (preview.c ?: 0) > 0
-    }.getOrDefault(false)
 
     /** True when the message still produces embed or attachment rows of its own. */
     private fun hasTrailingRows(message: Message): Boolean {
@@ -579,18 +339,33 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
      * and the gap silently goes stale. The 16dp spacer entry already separates the newest row from
      * the input box, so no position special case is needed here.
      */
-    private fun applySpacing(itemView: View, entry: MessageEntry, hasInlineMedia: Boolean) {
+    private fun applySpacing(itemView: View, entry: MessageEntry) {
         val message = entry.message
         val isGroupStart = !entry.isMinimal()
         // A non-minimal row opens a new author group and gets the wider lead; continuations stay tight
         val top = if (isGroupStart) dp(itemView, 4) else dp(itemView, 1)
-        // Media and embeds bring their own 4dp lead, so the row must not add a second gap there
+        // Media and embed rows bring their own 4dp lead, so the row must not add a second gap there
         val bottom = when {
-            hasTrailingRows(message) || hasInlineMedia -> 0
+            hasTrailingRows(message) -> 0
             isGroupStart -> dp(itemView, 4)
             else -> dp(itemView, 1)
         }
         itemView.setPadding(itemView.paddingLeft, top, itemView.paddingRight, bottom)
+
+        // A picture-only message still lays out its text view. ConstraintLayout collapses a GONE
+        // view in place rather than removing it, so its vertical margins keep reserving a blank
+        // line under the username and the picture below reads as a separate message
+        val textId = Utils.getResId("chat_list_adapter_item_text", "id")
+        if (textId == 0) return
+        val textView = itemView.findViewById<TextView>(textId) ?: return
+        if (textView.visibility != View.GONE) return
+        (textView.layoutParams as? ViewGroup.MarginLayoutParams)?.let { lp ->
+            if (lp.topMargin != 0 || lp.bottomMargin != 0) {
+                lp.topMargin = 0
+                lp.bottomMargin = 0
+                textView.layoutParams = lp
+            }
+        }
     }
 
     private fun patchImageLinkSuppression() {
@@ -718,30 +493,6 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
                 Map::class.java,
             ) { param ->
                 param.args[5] = true
-            }
-        }
-
-        // Drop the rows for media the message row now draws itself
-        runCatching {
-            patcher.after<ChatListEntry.Companion>(
-                "createEmbedEntries",
-                Message::class.java,
-                StoreMessageState.State::class.java,
-                Boolean::class.javaPrimitiveType!!,
-                Boolean::class.javaPrimitiveType!!,
-                Boolean::class.javaPrimitiveType!!,
-                Boolean::class.javaPrimitiveType!!,
-                Boolean::class.javaPrimitiveType!!,
-                Channel::class.java,
-                GuildMember::class.java,
-                Map::class.java,
-                Map::class.java,
-            ) { param ->
-                val entries = param.result as? List<*> ?: return@after
-                val kept = entries.filterNot {
-                    it is AttachmentEntry && isMergeableAttachment(it.attachment)
-                }
-                if (kept.size != entries.size) param.result = kept
             }
         }
 
