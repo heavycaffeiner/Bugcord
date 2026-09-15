@@ -344,7 +344,7 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
         val isGroupStart = !entry.isMinimal()
         // A non-minimal row opens a new author group and gets the wider lead; continuations stay tight
         val top = if (isGroupStart) dp(itemView, 4) else dp(itemView, 1)
-        // Media and embed rows bring their own 4dp lead, so the row must not add a second gap there
+        // Media, embed and sticker rows sit directly under the row and carry the gap themselves
         val bottom = when {
             hasTrailingRows(message) -> 0
             isGroupStart -> dp(itemView, 4)
@@ -537,11 +537,7 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
                 val imageContainer = getBoundField(binding, "s") as? View
                 imageView?.adjustViewBounds = true
 
-                // Single 4dp lead on the card, everything below it flush
-                setMediaMargins(topDp = 4, views = arrayOf(cardView, imageContainer, mediaView, imageView))
-                contentView?.let {
-                    it.setPadding(it.paddingLeft, 0, it.paddingRight, dp(it, 4))
-                }
+                zeroVerticalMargins(cardView, imageContainer, mediaView, imageView)
                 if (mediaView?.visibility != View.VISIBLE) {
                     contentView?.visibility = View.VISIBLE
                     dividerView?.visibility = View.VISIBLE
@@ -594,13 +590,9 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
             zeroVerticalMargins(holder.itemView)
             if (fAttachBinding != null) {
                 val b = fAttachBinding.get(holder) ?: return@after
-                // Same stacking as the embed row: one 4dp lead, nothing underneath
-                setMediaMargins(
-                    topDp = 4,
-                    views = arrayOf(
-                        getBoundField(b, "h") as? View,
-                        getBoundField(b, "d") as? View,
-                    ),
+                zeroVerticalMargins(
+                    getBoundField(b, "h") as? View,
+                    getBoundField(b, "d") as? View,
                 )
             }
         }
@@ -620,29 +612,20 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
     }
 
     /**
-     * Collapses the stacked vertical margins the chat row layouts put around media down to a single
-     * gap. Only the first visible view gets the lead so the gaps do not add up again.
+     * Strips the vertical margins the chat row layouts put around media. The stock layouts stack a
+     * gap on the row, the card and the image, which reads as a blank line once the rows are part of
+     * the message above them.
      */
-    private fun setMediaMargins(topDp: Int, views: Array<out View?>) {
-        var leadApplied = false
+    private fun zeroVerticalMargins(vararg views: View?) {
         views.forEach { view ->
             if (view == null) return@forEach
             val params = view.layoutParams as? ViewGroup.MarginLayoutParams ?: return@forEach
-            val top = if (!leadApplied && view.visibility == View.VISIBLE) {
-                leadApplied = true
-                dp(view, topDp)
-            } else {
-                0
-            }
-            if (params.topMargin == top && params.bottomMargin == 0) return@forEach
-            params.topMargin = top
+            if (params.topMargin == 0 && params.bottomMargin == 0) return@forEach
+            params.topMargin = 0
             params.bottomMargin = 0
             view.layoutParams = params
         }
     }
-
-    private fun zeroVerticalMargins(vararg views: View?) =
-        setMediaMargins(topDp = 0, views = views)
 
     private fun getBoundField(target: Any, name: String): Any? = runCatching {
         target.javaClass.getDeclaredField(name).apply { isAccessible = true }.get(target)
