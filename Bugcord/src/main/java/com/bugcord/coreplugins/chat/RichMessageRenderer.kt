@@ -187,15 +187,17 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
     }
 
     /**
-     * Code blocks end with a trailing newline that creates an empty line in Android's text layout.
-     * VerticalPaddingSpan adds font height plus 5dp padding to that line, creating an excessive gap
-     * at the bottom of the code block. Compact the trailing newline's font metrics so the empty line
-     * only takes minimal vertical space.
+     * BlockBackgroundNode.render appends a trailing newline and then spans the background and the
+     * vertical padding over the whole builder. StaticLayout turns that newline into its own empty
+     * line, and because BlockBackgroundSpan paints whenever getSpanEnd equals the line end, the
+     * background stretches over a full extra line plus its 5dp padding.
+     *
+     * Collapsing the span off the newline drops the background entirely, since the paint condition
+     * then fails on the last code line. Instead the empty trailing line itself is given zero height.
      */
     private fun patchCodeBlockBottomPadding() {
         runCatching {
-            val vpsClass = Class.forName("com.discord.utilities.spans.VerticalPaddingSpan")
-            val chooseHeight = vpsClass.getDeclaredMethod(
+            val chooseHeight = VerticalPaddingSpan::class.java.getDeclaredMethod(
                 "chooseHeight",
                 CharSequence::class.java,
                 Int::class.javaPrimitiveType!!,
@@ -208,47 +210,18 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
                 override fun afterHookedMethod(param: MethodHookParam) {
                     val span = param.thisObject as? VerticalPaddingSpan ?: return
                     val text = param.args[0] as? Spanned ?: return
+                    val start = param.args[1] as? Int ?: return
                     val end = param.args[2] as? Int ?: return
                     val fm = param.args[5] as? Paint.FontMetricsInt ?: return
+                    if (text.getSpanEnd(span) != end) return
 
-                    val spanEnd = text.getSpanEnd(span)
-                    if (spanEnd == end) {
-                        fm.ascent = -4
-                        fm.top = -4
+                    // The trailing newline forms a zero-length line; that is the one to flatten.
+                    // A real code line keeps its height, otherwise the last row of code is squashed.
+                    if (start >= end) {
+                        fm.top = 0
+                        fm.ascent = 0
                         fm.descent = 0
                         fm.bottom = 0
-                    }
-                }
-            })
-        }
-
-        runCatching {
-            val bbsClass = Class.forName("com.discord.utilities.spans.BlockBackgroundSpan")
-            val dbMethod = bbsClass.getDeclaredMethod(
-                "drawBackground",
-                Canvas::class.java,
-                Paint::class.java,
-                Int::class.javaPrimitiveType!!,
-                Int::class.javaPrimitiveType!!,
-                Int::class.javaPrimitiveType!!,
-                Int::class.javaPrimitiveType!!,
-                Int::class.javaPrimitiveType!!,
-                CharSequence::class.java,
-                Int::class.javaPrimitiveType!!,
-                Int::class.javaPrimitiveType!!,
-                Int::class.javaPrimitiveType!!,
-            )
-            Patcher.addPatch(dbMethod, object : XC_MethodHook() {
-                override fun beforeHookedMethod(param: MethodHookParam) {
-                    val span = param.thisObject as? BlockBackgroundSpan ?: return
-                    val text = param.args[7] as? Spanned ?: return
-                    val end = param.args[9] as? Int ?: return
-                    val spanEnd = text.getSpanEnd(span)
-                    if (spanEnd == end) {
-                        val origBottom = param.args[6] as? Int ?: return
-                        val top = param.args[4] as? Int ?: 0
-                        val pull = 40
-                        param.args[6] = (origBottom - pull).coerceAtLeast(top)
                     }
                 }
             })
@@ -655,13 +628,9 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
                 val imageContainer = getBoundField(binding, "s") as? View
                 imageView?.adjustViewBounds = true
 
-                (cardView?.layoutParams as? ViewGroup.MarginLayoutParams)?.let { params ->
-                    if (params.topMargin != 0 || params.bottomMargin != 0) {
-                        params.topMargin = 0
-                        params.bottomMargin = 0
-                        cardView.layoutParams = params
-                    }
-                }
+                // The card, the image container and the inline media each carry their own vertical
+                // margins in the layout, and they stack on top of each other above the picture
+                zeroVerticalMargins(cardView, imageContainer, mediaView, imageView)
                 contentView?.let {
                     it.setPadding(it.paddingLeft, 0, it.paddingRight, dp(it, 4))
                 }
@@ -714,31 +683,13 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
         ) { param ->
             val holder = param.thisObject as WidgetChatListAdapterItemAttachment
             holder.itemView.setPadding(0, 0, 0, 0)
-            (holder.itemView.layoutParams as? ViewGroup.MarginLayoutParams)?.let { params ->
-                if (params.topMargin != 0 || params.bottomMargin != 0) {
-                    params.topMargin = 0
-                    params.bottomMargin = 0
-                    holder.itemView.layoutParams = params
-                }
-            }
+            zeroVerticalMargins(holder.itemView)
             if (fAttachBinding != null) {
                 val b = fAttachBinding.get(holder) ?: return@after
-                val card = getBoundField(b, "d") as? View
-                val media = getBoundField(b, "h") as? View
-                (card?.layoutParams as? ViewGroup.MarginLayoutParams)?.let { params ->
-                    if (params.topMargin != 0 || params.bottomMargin != 0) {
-                        params.topMargin = 0
-                        params.bottomMargin = 0
-                        card.layoutParams = params
-                    }
-                }
-                (media?.layoutParams as? ViewGroup.MarginLayoutParams)?.let { params ->
-                    if (params.topMargin != 0 || params.bottomMargin != 0) {
-                        params.topMargin = 0
-                        params.bottomMargin = 0
-                        media.layoutParams = params
-                    }
-                }
+                zeroVerticalMargins(
+                    getBoundField(b, "d") as? View,
+                    getBoundField(b, "h") as? View,
+                )
             }
         }
         patcher.after<WidgetChatListAdapterItemSticker>(
@@ -748,21 +699,23 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
         ) { param ->
             val holder = param.thisObject as WidgetChatListAdapterItemSticker
             holder.itemView.setPadding(0, 0, 0, 0)
-            (holder.itemView.layoutParams as? ViewGroup.MarginLayoutParams)?.let { params ->
-                if (params.topMargin != 0 || params.bottomMargin != 0) {
-                    params.topMargin = 0
-                    params.bottomMargin = 0
-                    holder.itemView.layoutParams = params
-                }
+            zeroVerticalMargins(holder.itemView)
+            val stickerId = Utils.getResId("chat_list_adapter_item_sticker", "id")
+            if (stickerId != 0) {
+                zeroVerticalMargins(holder.itemView.findViewById<View>(stickerId))
             }
-            val stickerView = holder.itemView.findViewById<View>(0x7f0a0352)
-            (stickerView?.layoutParams as? ViewGroup.MarginLayoutParams)?.let { params ->
-                if (params.topMargin != 0 || params.bottomMargin != 0) {
-                    params.topMargin = 0
-                    params.bottomMargin = 0
-                    stickerView.layoutParams = params
-                }
-            }
+        }
+    }
+
+    /** Drops the stacked vertical margins the chat row layouts put around media. */
+    private fun zeroVerticalMargins(vararg views: View?) {
+        views.forEach { view ->
+            if (view == null) return@forEach
+            val params = view.layoutParams as? ViewGroup.MarginLayoutParams ?: return@forEach
+            if (params.topMargin == 0 && params.bottomMargin == 0) return@forEach
+            params.topMargin = 0
+            params.bottomMargin = 0
+            view.layoutParams = params
         }
     }
 
