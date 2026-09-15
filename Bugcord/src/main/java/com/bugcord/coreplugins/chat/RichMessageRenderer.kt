@@ -372,10 +372,11 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
                 container.layoutParams = lp
             }
         }
-        // Rows are recycled across channels. A reused InlineMediaView keeps showing the previous
-        // picture until its new load lands, and the purge on setData cannot reach rows sitting in
-        // the scrap pool. So whenever the container belongs to a different message, throw the old
-        // views away and build fresh ones: nothing is left holding a former channel's bitmap
+        // Rows are recycled, and a reused InlineMediaView keeps showing its previous picture until
+        // the new load lands. Identify each view by the media it draws rather than by the message:
+        // the stock EmbedEntry and AttachmentEntry keys are only type plus message id, so two
+        // pictures on one message share a key and DiffUtil hands a bound holder to the wrong row.
+        // StickerEntry avoids this by folding the sticker id in, which is the shape copied here
         val messageKey = message.id
         if (container.tag != messageKey) {
             container.removeAllViews()
@@ -384,16 +385,28 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
         while (container.childCount > media.size) container.removeViewAt(container.childCount - 1)
 
         media.forEachIndexed { index, item ->
-            val view = container.getChildAt(index) as? InlineMediaView ?: InlineMediaView(root.context).also {
-                it.radius = dp(root, 8).toFloat()
-                it.cardElevation = 0f
-                container.addView(
-                    it,
-                    LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.WRAP_CONTENT,
-                        ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ).apply { topMargin = 0 },
-                )
+            val key = "$messageKey#$index#${mediaIdentity(item)}"
+            var view = container.getChildAt(index) as? InlineMediaView
+
+            // A view holding different media must go, not be rebound, otherwise its old bitmap
+            // stays on screen for the whole load
+            if (view != null && view.tag != key) {
+                container.removeViewAt(index)
+                view = null
+            }
+            if (view == null) {
+                view = InlineMediaView(root.context).also {
+                    it.radius = dp(root, 8).toFloat()
+                    it.cardElevation = 0f
+                    container.addView(
+                        it,
+                        index,
+                        LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.WRAP_CONTENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ).apply { topMargin = 0 },
+                    )
+                }
             }
 
             // Reserve the final size up front and keep the placeholder tint behind it, so the row
@@ -410,7 +423,6 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
                 }
             }
 
-            val key = "$messageKey#$index"
             if (view.tag != key) {
                 view.tag = key
                 bindMedia(view, item)
@@ -462,6 +474,13 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
         }
     }
 
+
+    /** Identifies the picture a view draws, so a recycled view is never mistaken for a match. */
+    private fun mediaIdentity(item: Any): String = when (item) {
+        is MessageAttachment -> item.url.orEmpty().ifEmpty { item.proxyUrl.orEmpty() }
+        is MessageEmbed -> EmbedResourceUtils.INSTANCE.getPreviewImage(item)?.a.orEmpty()
+        else -> ""
+    }
     /** The size a media view will settle at, used to hold the space open while it loads. */
     private fun reservedSize(view: View, item: Any): Pair<Int, Int> = when (item) {
         is MessageAttachment -> scaledSize(view, item.width ?: 0, item.height ?: 0)
@@ -588,10 +607,13 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
             )
             Patcher.addPatch(renderMethod, object : XC_MethodHook() {
                 override fun beforeHookedMethod(param: MethodHookParam) {
-                    val mask = fMask.get(param.thisObject) as? String
                     val url = fUrl.get(param.thisObject) as? String ?: return
-                    // For bare image links, suppress rendering the URL text so only the image is visible
-                    if (mask == null && isImageLink(url)) {
+                    if (!isImageLink(url)) return
+                    val mask = fMask.get(param.thisObject) as? String
+                    // A bare image link renders as the picture alone. A markdown link whose label
+                    // is just the url is the same thing written differently, so drop its text too.
+                    // A real label is left alone, since that text is the point of writing it
+                    if (mask == null || mask == url) {
                         param.result = null
                     }
                 }
