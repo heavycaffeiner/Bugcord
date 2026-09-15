@@ -86,8 +86,6 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
 
     private val mediaContainerId = View.generateViewId()
 
-    /** Tag key holding the message id a media view was bound to, to reject stale async loads. */
-    private val mediaOwnerKey = View.generateViewId()
 
     /**
      * Builders whose code block trailing newline was removed, awaiting a sibling node. Weak and
@@ -273,8 +271,13 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
             val entry = param.args[1] as? MessageEntry ?: return@after
             val itemView = holder.itemView as? ConstraintLayout ?: return@after
 
-            val hasInlineMedia = renderInlineMedia(itemView, entry.message)
-            applySpacing(itemView, entry, hasInlineMedia, position)
+            // A throw here would abort the row mid-render and leave the picture unattached, so
+            // keep media and spacing independent
+            val hasInlineMedia = runCatching { renderInlineMedia(itemView, entry.message) }
+                .onFailure { logger.error("Failed to render inline media", it) }
+                .getOrDefault(false)
+            runCatching { applySpacing(itemView, entry, hasInlineMedia, position) }
+                .onFailure { logger.error("Failed to apply message spacing", it) }
         }
 
         // The 24dp typing indicator spacer sits at position 0 in the reverse layout even when nobody
@@ -312,7 +315,7 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
                     val container = row.findViewById<LinearLayout>(mediaContainerId) ?: continue
                     container.removeAllViews()
                     container.visibility = View.GONE
-                    container.setTag(mediaOwnerKey, null)
+                    container.tag = null
                 }
             })
         }
@@ -370,9 +373,10 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
         }
         // Views are recycled across channels, and bindMedia loads asynchronously, so a view can
         // finish loading the previous row's picture after it has been rebound. Tag each view with
-        // the message it belongs to and rebind whenever that tag does not match
+        // the message it belongs to and rebind whenever that tag does not match. The keyed setTag
+        // overload rejects anything that is not an aapt resource id, so use the plain slot
         val messageKey = message.id
-        container.setTag(mediaOwnerKey, messageKey)
+        container.tag = messageKey
         while (container.childCount > media.size) container.removeViewAt(container.childCount - 1)
         media.forEachIndexed { index, item ->
             val view = container.getChildAt(index) as? InlineMediaView ?: InlineMediaView(root.context).also {
@@ -387,8 +391,9 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
                     ).apply { topMargin = 0 },
                 )
             }
-            if (view.getTag(mediaOwnerKey) != messageKey) {
-                view.setTag(mediaOwnerKey, messageKey)
+            val key = "$messageKey#$index"
+            if (view.tag != key) {
+                view.tag = key
                 bindMedia(view, item)
             }
         }
@@ -510,9 +515,17 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
     private fun applySpacing(itemView: View, entry: MessageEntry, hasInlineMedia: Boolean, position: Int) {
         val message = entry.message
         val isLastMessage = position <= 1
+        val isGroupStart = !entry.isMinimal()
         // A non-minimal row opens a new author group and gets the wider lead; continuations stay tight
-        val top = if (entry.isMinimal()) dp(itemView, 1) else dp(itemView, 4)
-        val bottom = if (isLastMessage || hasTrailingRows(message) || hasInlineMedia) 0 else dp(itemView, 1)
+        val top = if (isGroupStart) dp(itemView, 4) else dp(itemView, 1)
+        // Media and embeds bring their own 4dp lead, so the row must not add a second gap there.
+        // Otherwise a group start keeps its own 4dp below the avatar row
+        val bottom = when {
+            isLastMessage -> 0
+            hasTrailingRows(message) || hasInlineMedia -> 0
+            isGroupStart -> dp(itemView, 4)
+            else -> dp(itemView, 1)
+        }
         itemView.setPadding(itemView.paddingLeft, top, itemView.paddingRight, bottom)
     }
 
@@ -689,9 +702,9 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
             val embed = entry.embed
             holder.itemView.visibility = View.VISIBLE
             holder.itemView.setPadding(0, 0, 0, 0)
-            // The row style puts 5dp above and below every embed card. Carry the single 4dp lead
-            // on the row and clear everything inside it, so the layers cannot stack back up
-            setMediaMargins(topDp = 4, views = arrayOf(holder.itemView))
+            // The embed is its own row directly under the header row, so any margin here reads as
+            // a blank line. The card keeps the gap above the picture instead
+            zeroVerticalMargins(holder.itemView)
 
             if (fBinding != null) {
                 val binding = fBinding.get(holder) ?: return@after
@@ -706,8 +719,8 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
                 val imageContainer = getBoundField(binding, "s") as? View
                 imageView?.adjustViewBounds = true
 
-                // Everything inside the card is flush; the row above already carries the lead
-                zeroVerticalMargins(cardView, imageContainer, mediaView, imageView)
+                // Single 4dp lead on the card, everything below it flush
+                setMediaMargins(topDp = 4, views = arrayOf(cardView, imageContainer, mediaView, imageView))
                 contentView?.let {
                     it.setPadding(it.paddingLeft, 0, it.paddingRight, dp(it, 4))
                 }
