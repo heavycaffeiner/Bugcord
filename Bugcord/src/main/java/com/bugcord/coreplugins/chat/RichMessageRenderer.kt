@@ -247,13 +247,14 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
     }
 
     /**
-     * A message with no text of its own, a bot embed or a bare picture, still reserves a text line
-     * under the username, so the card below reads as a second message. The stock row sets the text
-     * view GONE when the parsed content is empty, but its sibling views are chained beneath it and
-     * the reply spline keeps the chain's height, so the row stays a full line tall.
+     * A picture, sticker or embed message is emitted as two entries: a MessageEntry holding the
+     * avatar, username and timestamp, and a separate row holding the media. When the message has no
+     * text the first row still draws a full header, so the screen shows an empty message followed by
+     * the media: two messages worth of height for one message.
      *
-     * Collapse that line by zeroing the GONE text view's margins. Everything else about the row,
-     * including the layout's own 10dp top padding, is left exactly as the stock layout set it.
+     * The media rows carry no header views of their own, so the header has to stay on the message
+     * row. What goes instead is the gap under it, which is what separates the two rows visually.
+     * The header row is pulled flush against the media so the pair reads as one message.
      */
     private fun patchMessageLayout() {
         patcher.after<WidgetChatListAdapterItemMessage>(
@@ -262,28 +263,23 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
             ChatListEntry::class.java,
         ) { param ->
             val holder = param.thisObject as WidgetChatListAdapterItemMessage
-            param.args[1] as? MessageEntry ?: return@after
-            val itemView = holder.itemView as? ConstraintLayout ?: return@after
-            runCatching { collapseEmptyTextLine(itemView) }
-                .onFailure { logger.error("Failed to collapse the empty text line", it) }
+            val entry = param.args[1] as? MessageEntry ?: return@after
+            val itemView = holder.itemView ?: return@after
+            runCatching { applyRowGap(itemView, entry) }
+                .onFailure { logger.error("Failed to apply the message row gap", it) }
         }
     }
 
-    /** Drops the vertical margins of the row's text view while it is hidden. */
-    private fun collapseEmptyTextLine(itemView: ConstraintLayout) {
-        val textId = Utils.getResId("chat_list_adapter_item_text", "id")
-        if (textId == 0) return
-        val textView = itemView.findViewById<TextView>(textId) ?: return
-        val params = textView.layoutParams as? ViewGroup.MarginLayoutParams ?: return
+    private fun applyRowGap(itemView: View, entry: MessageEntry) {
+        // Rows are recycled, so both branches must set every value they depend on
+        val ownsMediaRows = hasTrailingRows(entry.message)
+        val textless = entry.message.content.isNullOrBlank()
 
-        // Rows are recycled, so the margins must come back when the view is used again
-        val hidden = textView.visibility == View.GONE
-        val top = if (hidden) 0 else dp(itemView, 2)
-        val bottom = if (hidden) 0 else dp(itemView, 2)
-        if (params.topMargin == top && params.bottomMargin == bottom) return
-        params.topMargin = top
-        params.bottomMargin = bottom
-        textView.layoutParams = params
+        // A textless media message is only a header, so close the gap to the media under it
+        val bottom = if (ownsMediaRows) 0 else dp(itemView, 4)
+        val top = if (ownsMediaRows && textless) dp(itemView, 6) else dp(itemView, 10)
+        if (itemView.paddingTop == top && itemView.paddingBottom == bottom) return
+        itemView.setPadding(itemView.paddingLeft, top, itemView.paddingRight, bottom)
     }
 
     /**
@@ -559,7 +555,9 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
                 val imageContainer = getBoundField(binding, "s") as? View
                 imageView?.adjustViewBounds = true
 
-                zeroVerticalMargins(cardView, imageContainer, mediaView, imageView)
+                // The card's own 5dp bottom margin is the gap under the embed, so only the
+                // stacked top margins are collapsed here
+                zeroTopMargins(cardView, imageContainer, mediaView, imageView)
                 if (mediaView?.visibility != View.VISIBLE) {
                     contentView?.visibility = View.VISIBLE
                     dividerView?.visibility = View.VISIBLE
@@ -645,6 +643,17 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
             if (params.topMargin == 0 && params.bottomMargin == 0) return@forEach
             params.topMargin = 0
             params.bottomMargin = 0
+            view.layoutParams = params
+        }
+    }
+
+    /** Collapses stacked top margins while leaving the view's own bottom gap intact. */
+    private fun zeroTopMargins(vararg views: View?) {
+        views.forEach { view ->
+            if (view == null) return@forEach
+            val params = view.layoutParams as? ViewGroup.MarginLayoutParams ?: return@forEach
+            if (params.topMargin == 0) return@forEach
+            params.topMargin = 0
             view.layoutParams = params
         }
     }
