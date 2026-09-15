@@ -62,6 +62,7 @@ import com.discord.utilities.textprocessing.node.BlockBackgroundNode
 import com.discord.utilities.textprocessing.node.BasicRenderContext
 import com.discord.utilities.textprocessing.node.BulletListNode
 import com.discord.widgets.chat.list.InlineMediaView
+import com.discord.widgets.chat.list.adapter.WidgetChatListAdapter
 import com.discord.widgets.chat.list.adapter.WidgetChatListAdapterItemEmbed
 import com.discord.widgets.chat.list.adapter.WidgetChatListItem
 import com.discord.widgets.chat.list.adapter.WidgetChatListAdapterItemAttachment
@@ -75,6 +76,8 @@ import com.discord.widgets.media.WidgetMedia
 import de.robv.android.xposed.XC_MethodHook
 import java.util.regex.Matcher
 import java.util.regex.Pattern
+import java.util.Collections
+import java.util.WeakHashMap
 
 /** Enables the legacy parser's message header/list rules for normal messages. */
 internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer")) {
@@ -82,6 +85,16 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
     override val isRequired = true
 
     private val mediaContainerId = View.generateViewId()
+
+    /** Tag key holding the message id a media view was bound to, to reject stale async loads. */
+    private val mediaOwnerKey = View.generateViewId()
+
+    /**
+     * Builders whose code block trailing newline was removed, awaiting a sibling node. Weak and
+     * identity based so a builder that is never appended to is collected rather than retained.
+     */
+    private val pendingCodeBlockNewlines: MutableSet<SpannableStringBuilder> =
+        Collections.newSetFromMap(WeakHashMap<SpannableStringBuilder, Boolean>())
 
     override fun start(context: Context) {
         // configureParser must run before any parser is built, and it must not be able to take the
@@ -189,42 +202,17 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
     }
 
     /**
-     * BlockBackgroundNode gives a code block 5dp of padding on both sides and appends a trailing
-     * newline, which StaticLayout lays out as an extra empty line. BlockBackgroundSpan repaints on
-     * every line whose end matches the span end, so the background is stretched down over that
-     * empty line and the block gains a full line of dead space underneath.
+     * BlockBackgroundNode appends a trailing newline, which StaticLayout lays out as a second,
+     * empty line. Measured on device: "code\n" is 2 lines totalling 101px, against 54px once the
+     * newline is gone. No span can shrink that line. AbsoluteSizeSpan and RelativeSizeSpan over the
+     * newline leave it at 48px either way, because the line covers a zero-length range, and
+     * LineHeightSpan.chooseHeight is never invoked for it. Only deleting the newline collapses it.
      *
-     * The empty line's own draw call is skipped so the background stops at the last line of code,
-     * and the padding span is rebuilt as top-only.
+     * Deleting it outright was tried before and glued the next node onto the last line of code,
+     * since siblings append after this returns. So the newline is removed here and restored lazily
+     * if anything is appended afterwards, which also stops it being the trailing character.
      */
     private fun patchCodeBlockPadding() {
-        runCatching {
-            val drawBackground = BlockBackgroundSpan::class.java.getDeclaredMethod(
-                "drawBackground",
-                Canvas::class.java,
-                Paint::class.java,
-                Int::class.javaPrimitiveType!!,
-                Int::class.javaPrimitiveType!!,
-                Int::class.javaPrimitiveType!!,
-                Int::class.javaPrimitiveType!!,
-                Int::class.javaPrimitiveType!!,
-                CharSequence::class.java,
-                Int::class.javaPrimitiveType!!,
-                Int::class.javaPrimitiveType!!,
-                Int::class.javaPrimitiveType!!,
-            )
-            Patcher.addPatch(drawBackground, PreHook { param ->
-                val start = param.args[8] as? Int ?: return@PreHook
-                val end = param.args[9] as? Int ?: return@PreHook
-                // A zero-length line is the trailing newline, never a real line of code. Skipping
-                // its draw leaves the rect at the previous line's bottom, so the block hugs the code
-                if (start >= end) param.result = null
-            })
-        }
-
-        // Rebuild the block's padding span as top-only so the gap above the code survives while the
-        // bottom one goes away, and collapse the trailing newline's own line height. Bullets,
-        // headers and changelogs build their own padding spans and are left untouched
         runCatching {
             val renderMethod = BlockBackgroundNode::class.java.getDeclaredMethod(
                 "render",
@@ -238,26 +226,38 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
                     val end = builder.length
                     if (end < 1 || builder[end - 1] != '\n') return
 
-                    // Take the padding span covering this block, not one an earlier node added
+                    // Match the padding span this block just added, not one from an earlier node
                     val span = builder.getSpans(0, end, VerticalPaddingSpan::class.java)
                         .lastOrNull { builder.getSpanEnd(it) == end } ?: return
                     val start = builder.getSpanStart(span)
-                    if (start < 0) return
+                    if (start < 0 || start >= end) return
 
+                    // Keep the lead above the code, drop the padding under it
                     builder.removeSpan(span)
-                    builder.setSpan(
-                        VerticalPaddingSpan(dpToPx(context, 4), 0),
-                        start,
-                        end,
-                        SPAN_FLAGS,
-                    )
+                    builder.setSpan(VerticalPaddingSpan(dpToPx(context, 4), 0), start, end, SPAN_FLAGS)
 
-                    // StaticLayout gives the trailing newline its own line, and chooseHeight is
-                    // never called for it, so its height has to be removed through the font itself.
-                    // The newline draws nothing, so scaling it away is invisible, and the background
-                    // span still ends on this line and keeps painting
-                    builder.setSpan(RelativeSizeSpan(0f), end - 1, end, SPAN_FLAGS)
+                    // The spans stay anchored to the code, and the background keeps painting
+                    // because its end still lands on the last line of code once this is gone
+                    builder.delete(end - 1, end)
+                    pendingCodeBlockNewlines.add(builder)
                 }
+            })
+        }
+
+        // Restore the separator before any later node renders, so the next node cannot run onto
+        // the code's last line. Verified on device: without this the text reads "codeafter".
+        // Node.render is the single dispatch point every node goes through
+        runCatching {
+            val nodeRender = Class.forName("com.discord.simpleast.core.node.Node").getDeclaredMethod(
+                "render",
+                SpannableStringBuilder::class.java,
+                Any::class.java,
+            )
+            Patcher.addPatch(nodeRender, PreHook { param ->
+                val builder = param.args[0] as? SpannableStringBuilder ?: return@PreHook
+                if (!pendingCodeBlockNewlines.remove(builder)) return@PreHook
+                val len = builder.length
+                if (len > 0 && builder[len - 1] != '\n') builder.append("\n")
             })
         }
     }
@@ -296,6 +296,25 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
                     }
                 }
             }
+        }
+
+        // A recycled row keeps the media container we attached to it, and onConfigure only runs
+        // for rows the adapter actually rebinds. Switching channels could therefore leave the
+        // previous channel's picture on screen. Drop every container when the data set is swapped
+        runCatching {
+            val dataClass = Class.forName("com.discord.widgets.chat.list.adapter.WidgetChatListAdapter\$Data")
+            val setData = WidgetChatListAdapter::class.java.getDeclaredMethod("setData", dataClass)
+            Patcher.addPatch(setData, PreHook { param ->
+                val adapter = param.thisObject as? WidgetChatListAdapter ?: return@PreHook
+                val recycler = adapter.recycler ?: return@PreHook
+                for (i in 0 until recycler.childCount) {
+                    val row = recycler.getChildAt(i) as? ViewGroup ?: continue
+                    val container = row.findViewById<LinearLayout>(mediaContainerId) ?: continue
+                    container.removeAllViews()
+                    container.visibility = View.GONE
+                    container.setTag(mediaOwnerKey, null)
+                }
+            })
         }
     }
     /**
@@ -349,6 +368,11 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
                 container.layoutParams = lp
             }
         }
+        // Views are recycled across channels, and bindMedia loads asynchronously, so a view can
+        // finish loading the previous row's picture after it has been rebound. Tag each view with
+        // the message it belongs to and rebind whenever that tag does not match
+        val messageKey = message.id
+        container.setTag(mediaOwnerKey, messageKey)
         while (container.childCount > media.size) container.removeViewAt(container.childCount - 1)
         media.forEachIndexed { index, item ->
             val view = container.getChildAt(index) as? InlineMediaView ?: InlineMediaView(root.context).also {
@@ -363,7 +387,10 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
                     ).apply { topMargin = 0 },
                 )
             }
-            bindMedia(view, item)
+            if (view.getTag(mediaOwnerKey) != messageKey) {
+                view.setTag(mediaOwnerKey, messageKey)
+                bindMedia(view, item)
+            }
         }
         return true
     }
@@ -662,13 +689,9 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
             val embed = entry.embed
             holder.itemView.visibility = View.VISIBLE
             holder.itemView.setPadding(0, 0, 0, 0)
-            (holder.itemView.layoutParams as? ViewGroup.MarginLayoutParams)?.let { params ->
-                if (params.topMargin != 0 || params.bottomMargin != 0) {
-                    params.topMargin = 0
-                    params.bottomMargin = 0
-                    holder.itemView.layoutParams = params
-                }
-            }
+            // The row style puts 5dp above and below every embed card. Carry the single 4dp lead
+            // on the row and clear everything inside it, so the layers cannot stack back up
+            setMediaMargins(topDp = 4, views = arrayOf(holder.itemView))
 
             if (fBinding != null) {
                 val binding = fBinding.get(holder) ?: return@after
@@ -683,9 +706,8 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
                 val imageContainer = getBoundField(binding, "s") as? View
                 imageView?.adjustViewBounds = true
 
-                // The card, the image container and the inline media each carry their own vertical
-                // margins that stack above the picture. Collapse them to a single 4dp lead
-                setMediaMargins(topDp = 4, views = arrayOf(cardView, imageContainer, mediaView, imageView))
+                // Everything inside the card is flush; the row above already carries the lead
+                zeroVerticalMargins(cardView, imageContainer, mediaView, imageView)
                 contentView?.let {
                     it.setPadding(it.paddingLeft, 0, it.paddingRight, dp(it, 4))
                 }
