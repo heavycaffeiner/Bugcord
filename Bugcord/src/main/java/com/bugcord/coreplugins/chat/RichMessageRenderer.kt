@@ -283,7 +283,20 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
             val itemView = holder.itemView as? ConstraintLayout ?: return@after
             runCatching { inlineMedia(holder, itemView, entry, position) }
                 .onFailure { logger.error("Failed to inline the message media", it) }
+            runCatching { applyRowGap(itemView) }
+                .onFailure { logger.error("Failed to apply the message row gap", it) }
         }
+    }
+
+    /**
+     * The stock layout declares a top padding on the row but no bottom padding, because whatever
+     * follows a message supplies its own lead. The inlined media sits inside the row now, so the
+     * row itself has to close the group.
+     */
+    private fun applyRowGap(itemView: View) {
+        val bottom = dp(itemView, 4)
+        if (itemView.paddingBottom == bottom) return
+        itemView.setPadding(itemView.paddingLeft, itemView.paddingTop, itemView.paddingRight, bottom)
     }
 
     /**
@@ -360,9 +373,12 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
     }
 
     /**
-     * The rows this message owns, taken from the list the model already built. The entries are the
-     * real ones the chat list would have shown, so nothing is reconstructed here and any change to
-     * how Discord builds them is picked up for free.
+     * The rows this message owns, taken from the list the model already built, so nothing is
+     * reconstructed here.
+     *
+     * The chat list runs with setReverseLayout(true) and the list is stored newest first, so the
+     * rows the model appended after a message sit at lower indices than the message itself. They
+     * are collected walking backwards and returned in the order the model produced them.
      */
     private fun trailingEntries(
         adapter: WidgetChatListAdapter,
@@ -370,20 +386,21 @@ internal class RichMessageRenderer : CorePlugin(Manifest("RichMessageRenderer"))
         position: Int,
     ): List<ChatListEntry> {
         val list = adapter.data?.list ?: return emptyList()
-        val messageId = entry.message.id
-        val owned = ArrayList<ChatListEntry>()
+        if (position !in list.indices || list[position] !== entry) return emptyList()
 
-        // The rows a message owns directly follow it, so stop at the first row that is not one
-        for (index in position + 1 until list.size) {
+        val messageId = entry.message.id
+        val owned = ArrayDeque<ChatListEntry>()
+
+        for (index in position - 1 downTo 0) {
             val candidate = list[index]
             val ownerId = when (candidate) {
                 is EmbedEntry -> candidate.message.id
                 is AttachmentEntry -> candidate.message.id
                 is StickerEntry -> candidate.message.id
-                else -> return owned
+                else -> break
             }
-            if (ownerId != messageId) return owned
-            owned += candidate
+            if (ownerId != messageId) break
+            owned.addFirst(candidate)
         }
         return owned
     }
